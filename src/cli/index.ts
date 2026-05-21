@@ -467,12 +467,13 @@ program
   .option('--archived', 'Validate that archived changes have all tasks completed (for pre-commit linting)')
   .option('--type <type>', 'Specify item type when ambiguous: change|spec')
   .option('--strict', 'Enable strict validation mode')
+  .option('--accept-cross-change-base', 'Allow a MODIFIED requirement in a change delta to reference a Requirement that lives in a sister-pending change (`openspec/changes/<other>/specs/<cap>/spec.md`) rather than the canonical spec. REMOVED and RENAMED-from always require a canonical base. Default: false (matches archive-time strictness); archive remains strict regardless — this flag affects only write-time validate.')
   .option('--json', 'Output validation results as JSON')
   .option('--concurrency <n>', 'Max concurrent validations (defaults to env OPENSPEC_CONCURRENCY or 6)')
   .option('--no-interactive', 'Disable interactive prompts')
   .option('--store <id>', STORE_OPTION_DESCRIPTION)
   .addOption(hiddenStorePathOption())
-  .action(async (itemName?: string, options?: { all?: boolean; changes?: boolean; specs?: boolean; archived?: boolean; type?: string; strict?: boolean; json?: boolean; noInteractive?: boolean; concurrency?: string; store?: string; storePath?: string }) => {
+  .action(async (itemName?: string, options?: { all?: boolean; changes?: boolean; specs?: boolean; archived?: boolean; type?: string; strict?: boolean; acceptCrossChangeBase?: boolean; json?: boolean; noInteractive?: boolean; concurrency?: string; store?: string; storePath?: string }) => {
     try {
       const validateCommand = new ValidateCommand();
       await validateCommand.execute(itemName, options);

@@ -26,6 +26,25 @@ interface ExecuteOptions {
   archived?: boolean;
   type?: string;
   strict?: boolean;
+  /**
+   * Opt-in: allow a `MODIFIED` requirement in a delta spec to
+   * reference a Requirement that lives in a sister-pending change
+   * (`openspec/changes/<other>/specs/<cap>/spec.md`) rather than the
+   * canonical spec (`openspec/specs/<cap>/spec.md`) — extending
+   * pending work before either change archives.
+   *
+   * `REMOVED` and `RENAMED-from` always require a canonical base:
+   * a sister-pending requirement is still editable, so removing or
+   * renaming it belongs in the sister itself, and accepting it here
+   * would couple the two changes' archive order.
+   *
+   * Default: false — validate matches archive-time semantics.
+   *
+   * Archive (`openspec archive`) remains strict regardless of this
+   * flag; you must archive the sister change first OR fold this
+   * change into it before this change's own archive succeeds.
+   */
+  acceptCrossChangeBase?: boolean;
   json?: boolean;
   noInteractive?: boolean;
   interactive?: boolean; // Commander sets this to false when --no-interactive is used
@@ -72,14 +91,14 @@ export class ValidateCommand {
       await this.runBulkValidation(root, {
         changes: !!options.all || !!options.changes,
         specs: !!options.all || !!options.specs,
-      }, { strict: !!options.strict, json: !!options.json, concurrency: options.concurrency, noInteractive: resolveNoInteractive(options) });
+      }, { strict: !!options.strict, acceptCrossChangeBase: !!options.acceptCrossChangeBase, json: !!options.json, concurrency: options.concurrency, noInteractive: resolveNoInteractive(options) });
       return;
     }
 
     // No item and no flags
     if (!itemName) {
       if (interactive) {
-        await this.runInteractiveSelector(root, { strict: !!options.strict, json: !!options.json, concurrency: options.concurrency });
+        await this.runInteractiveSelector(root, { strict: !!options.strict, acceptCrossChangeBase: !!options.acceptCrossChangeBase, json: !!options.json, concurrency: options.concurrency });
         return;
       }
       this.printNonInteractiveHint(root);
@@ -89,7 +108,7 @@ export class ValidateCommand {
 
     // Direct item validation with type detection or override
     const typeOverride = this.normalizeType(options.type);
-    await this.validateDirectItem(root, itemName, { typeOverride, strict: !!options.strict, json: !!options.json });
+    await this.validateDirectItem(root, itemName, { typeOverride, strict: !!options.strict, acceptCrossChangeBase: !!options.acceptCrossChangeBase, json: !!options.json });
   }
 
   private normalizeType(value?: string): ItemType | undefined {
@@ -111,7 +130,7 @@ export class ValidateCommand {
     return ids.sort();
   }
 
-  private async runInteractiveSelector(root: ResolvedOpenSpecRoot, opts: { strict: boolean; json: boolean; concurrency?: string }): Promise<void> {
+  private async runInteractiveSelector(root: ResolvedOpenSpecRoot, opts: { strict: boolean; acceptCrossChangeBase: boolean; json: boolean; concurrency?: string }): Promise<void> {
     const { select } = await import('@inquirer/prompts');
     const choice = await select({
       message: 'What would you like to validate?',
@@ -150,7 +169,7 @@ export class ValidateCommand {
     console.error('Or run in an interactive terminal.');
   }
 
-  private async validateDirectItem(root: ResolvedOpenSpecRoot, itemName: string, opts: { typeOverride?: ItemType; strict: boolean; json: boolean }): Promise<void> {
+  private async validateDirectItem(root: ResolvedOpenSpecRoot, itemName: string, opts: { typeOverride?: ItemType; strict: boolean; acceptCrossChangeBase: boolean; json: boolean }): Promise<void> {
     const [changes, specs] = await Promise.all([this.listChangeIds(root), getSpecIds(root.path)]);
     const isChange = changes.includes(itemName);
     const isSpec = specs.includes(itemName);
@@ -212,8 +231,8 @@ export class ValidateCommand {
     await this.validateByType(root, type, itemName, opts);
   }
 
-  private async validateByType(root: ResolvedOpenSpecRoot, type: ItemType, id: string, opts: { strict: boolean; json: boolean }): Promise<void> {
-    const validator = new Validator(opts.strict);
+  private async validateByType(root: ResolvedOpenSpecRoot, type: ItemType, id: string, opts: { strict: boolean; acceptCrossChangeBase?: boolean; json: boolean }): Promise<void> {
+    const validator = new Validator({ strictMode: opts.strict, acceptCrossChangeBase: !!opts.acceptCrossChangeBase });
     if (type === 'change') {
       const changeDir = path.join(root.changesDir, id);
       const start = Date.now();
@@ -285,7 +304,7 @@ export class ValidateCommand {
     bullets.forEach(b => console.error(`  ${b}`));
   }
 
-  private async runBulkValidation(root: ResolvedOpenSpecRoot, scope: { changes: boolean; specs: boolean }, opts: { strict: boolean; json: boolean; concurrency?: string; noInteractive?: boolean }): Promise<void> {
+  private async runBulkValidation(root: ResolvedOpenSpecRoot, scope: { changes: boolean; specs: boolean }, opts: { strict: boolean; acceptCrossChangeBase?: boolean; json: boolean; concurrency?: string; noInteractive?: boolean }): Promise<void> {
     const spinner = !opts.json && !opts.noInteractive ? ora('Validating...').start() : undefined;
     const [changeIds, specIds] = await Promise.all([
       scope.changes ? this.listChangeIds(root) : Promise.resolve<string[]>([]),
@@ -295,7 +314,7 @@ export class ValidateCommand {
     const DEFAULT_CONCURRENCY = 6;
     const maxSuggestions = 5; // used by nearestMatches
     const concurrency = normalizeConcurrency(opts.concurrency) ?? normalizeConcurrency(process.env.OPENSPEC_CONCURRENCY) ?? DEFAULT_CONCURRENCY;
-    const validator = new Validator(opts.strict);
+    const validator = new Validator({ strictMode: opts.strict, acceptCrossChangeBase: !!opts.acceptCrossChangeBase });
     const queue: Array<() => Promise<BulkItemResult>> = [];
 
     for (const id of changeIds) {
