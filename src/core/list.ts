@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { getTaskProgressForChange, formatTaskStatus } from '../utils/task-progress.js';
 import { readFileSync, type Dirent } from 'fs';
+import { parse as parseYaml } from 'yaml';
 import { MarkdownParser } from './parsers/markdown-parser.js';
 import type { RootOutput } from './root-selection.js';
 import { discoverSpecFiles } from '../utils/spec-discovery.js';
@@ -11,12 +12,31 @@ interface ChangeInfo {
   completedTasks: number;
   totalTasks: number;
   lastModified: Date;
+  lifecycle?: string;
 }
 
 interface ListOptions {
   sort?: 'recent' | 'name';
   json?: boolean;
   root?: RootOutput;
+  /** Filter changes by lifecycle status (projects with `lifecycle: status`). */
+  status?: string;
+}
+
+const LIFECYCLE_STATES = new Set(['proposed', 'applied', 'shipped']);
+
+// Non-throwing: list must render even when a change's metadata would fail the
+// stricter contract readChangeMetadata enforces — a broken change is status's
+// problem to report, not a reason to hide the whole list.
+function readLifecycleStatus(changePath: string): string | undefined {
+  try {
+    const raw = readFileSync(path.join(changePath, '.openspec.yaml'), 'utf-8');
+    const parsed = parseYaml(raw) as Record<string, unknown> | null;
+    const status = parsed?.['status'];
+    return typeof status === 'string' && LIFECYCLE_STATES.has(status) ? status : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function isMissingPathError(error: unknown): boolean {
@@ -123,12 +143,28 @@ export class ListCommand {
         const progress = await getTaskProgressForChange(changesDir, changeDir, targetPath);
         const changePath = path.join(changesDir, changeDir);
         const lastModified = await getLastModified(changePath);
+        const lifecycle = readLifecycleStatus(changePath);
+        if (options.status && lifecycle !== options.status) {
+          continue;
+        }
         changes.push({
           name: changeDir,
           completedTasks: progress.completed,
           totalTasks: progress.total,
-          lastModified
+          lastModified,
+          ...(lifecycle ? { lifecycle } : {})
         });
+      }
+
+      if (changes.length === 0) {
+        if (json) {
+          console.log(JSON.stringify({ changes: [], ...(root ? { root } : {}) }, null, 2));
+        } else {
+          console.log(
+            options.status ? `No changes with status '${options.status}'.` : 'No active changes found.'
+          );
+        }
+        return;
       }
 
       // Sort by preference (default: recent first)
@@ -145,7 +181,10 @@ export class ListCommand {
           completedTasks: c.completedTasks,
           totalTasks: c.totalTasks,
           lastModified: c.lastModified.toISOString(),
-          status: c.totalTasks === 0 ? 'no-tasks' : c.completedTasks === c.totalTasks ? 'complete' : 'in-progress'
+          status: c.totalTasks === 0 ? 'no-tasks' : c.completedTasks === c.totalTasks ? 'complete' : 'in-progress',
+          // `lifecycle`, not `status`: the task-progress field above already
+          // owns that name in this payload.
+          ...(c.lifecycle ? { lifecycle: c.lifecycle } : {})
         }));
         console.log(JSON.stringify({ changes: jsonOutput, ...(root ? { root } : {}) }, null, 2));
         return;
@@ -159,7 +198,8 @@ export class ListCommand {
         const paddedName = change.name.padEnd(nameWidth);
         const status = formatTaskStatus({ total: change.totalTasks, completed: change.completedTasks });
         const timeAgo = formatRelativeTime(change.lastModified);
-        console.log(`${padding}${paddedName}     ${status.padEnd(12)}  ${timeAgo}`);
+        const lifecycle = change.lifecycle ? `  [${change.lifecycle}]` : '';
+        console.log(`${padding}${paddedName}     ${status.padEnd(12)}  ${timeAgo}${lifecycle}`);
       }
       return;
     }

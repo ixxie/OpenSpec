@@ -19,6 +19,7 @@ import {
 } from '../core/version-check.js';
 import { ListCommand } from '../core/list.js';
 import { ArchiveCommand, type ArchiveOptions } from '../core/archive.js';
+import { SyncCommand } from '../core/sync.js';
 import { ViewCommand } from '../core/view.js';
 import { resolveRootForCommand, toRootOutput } from '../core/root-selection.js';
 import { registerSpecCommand } from '../commands/spec.js';
@@ -313,10 +314,11 @@ program
   .option('--specs', 'List specs instead of changes')
   .option('--changes', 'List changes explicitly (default)')
   .option('--sort <order>', 'Sort order: "recent" (default) or "name"', 'recent')
+  .option('--status <state>', 'Filter changes by lifecycle status (proposed, applied, shipped)')
   .option('--json', 'Output as JSON (for programmatic use)')
   .option('--store <id>', STORE_OPTION_DESCRIPTION)
   .addOption(hiddenStorePathOption())
-  .action(async (options?: { specs?: boolean; changes?: boolean; sort?: string; json?: boolean; store?: string; storePath?: string }) => {
+  .action(async (options?: { specs?: boolean; changes?: boolean; sort?: string; status?: string; json?: boolean; store?: string; storePath?: string }) => {
     try {
       const root = await resolveRootForCommand(options ?? {}, {
         json: options?.json,
@@ -334,6 +336,7 @@ program
       await listCommand.execute(root.path, mode, {
         sort,
         json: options?.json,
+        ...(options?.status ? { status: options.status } : {}),
         ...(options?.json ? { root: toRootOutput(root) } : {}),
       });
     } catch (error) {
@@ -443,6 +446,22 @@ program
     try {
       const archiveCommand = new ArchiveCommand();
       await archiveCommand.execute(changeName, options);
+    } catch (error) {
+      failWithError(error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('sync [change-name]')
+  .description(
+    "Fold shipped changes' spec deltas into main specs (projects with `lifecycle: status`)"
+  )
+  .option('--check', 'Verify only: exit 1 if a shipped change has unfolded deltas')
+  .option('--json', 'Output as JSON (non-interactive)')
+  .action(async (changeName?: string, options?: { check?: boolean; json?: boolean }) => {
+    try {
+      await new SyncCommand().execute(changeName, '.', options ?? {});
     } catch (error) {
       failWithError(error);
       process.exit(1);

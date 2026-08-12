@@ -46,6 +46,13 @@ export const ChangeMetadataSchema = z.object({
   // tree - only from git - so it is the author's call, not an inference from the
   // shape of a delta.
   retire_capabilities: z.boolean().optional(),
+  // Lifecycle state under `lifecycle: status` mode: the change's position in
+  // its life is data, not directory location, and nothing ever moves. Closed
+  // set because tooling attaches consequences to each category: `sync` folds
+  // only shipped changes' deltas into specs/, and overlap/drift tooling treats
+  // proposed/applied as holding a live claim on the requirements they touch.
+  // Absent on projects using the default `lifecycle: archive` mode.
+  status: z.enum(['proposed', 'applied', 'shipped']).optional(),
 });
 
 export type ChangeMetadata = z.infer<typeof ChangeMetadataSchema>;

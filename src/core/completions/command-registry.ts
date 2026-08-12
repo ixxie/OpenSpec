@@ -68,6 +68,12 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
         takesValue: true,
         values: ['recent', 'name'],
       },
+      {
+        name: 'status',
+        description: 'Filter changes by lifecycle status (proposed, applied, shipped)',
+        takesValue: true,
+        values: ['proposed', 'applied', 'shipped'],
+      },
       COMMON_FLAGS.json,
       COMMON_FLAGS.store,
     ],
@@ -174,6 +180,23 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
         description: 'Output as JSON (non-interactive)',
       },
       COMMON_FLAGS.store,
+    ],
+  },
+  {
+    name: 'sync',
+    description: "Fold shipped changes' spec deltas into main specs (lifecycle: status projects)",
+    acceptsPositional: true,
+    positionalType: 'change-id',
+    positionals: [{ name: 'change-name', type: 'change-id', optional: true }],
+    flags: [
+      {
+        name: 'check',
+        description: 'Verify only: exit 1 if a shipped change has unfolded deltas',
+      },
+      {
+        name: 'json',
+        description: 'Output as JSON (non-interactive)',
+      },
     ],
   },
   {

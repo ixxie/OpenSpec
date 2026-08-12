@@ -2,7 +2,7 @@ import path from 'path';
 import { FileSystemUtils } from './file-system.js';
 import { writeChangeMetadata, validateSchemaName } from './change-metadata.js';
 import { formatLocalDate } from './date.js';
-import { readProjectConfig } from '../core/project-config.js';
+import { readProjectConfig, resolveLifecycle } from '../core/project-config.js';
 import { isKebabId } from '../core/id.js';
 import type { ChangeMetadata } from '../core/change-metadata/index.js';
 
@@ -186,10 +186,13 @@ export async function createChange(
     await FileSystemUtils.writeFile(configPath, `schema: ${defaultSchema}\n`);
   }
 
-  // Write metadata file with schema and creation date
+  // Write metadata file with schema and creation date. Under
+  // `lifecycle: status` a change is born `proposed` — explicit from the start,
+  // so no change in that mode ever has an ambiguous lifecycle state.
   writeChangeMetadata(changeDir, {
     schema: schemaName,
     created: formatLocalDate(),
+    ...(resolveLifecycle(projectRoot) === 'status' ? { status: 'proposed' as const } : {}),
     ...options.metadata,
   }, projectRoot);
 
