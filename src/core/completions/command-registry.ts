@@ -104,6 +104,10 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
       },
       COMMON_FLAGS.type,
       COMMON_FLAGS.strict,
+      {
+        name: 'accept-cross-change-base',
+        description: 'Allow a MODIFIED requirement to reference a base living in a sister-pending change',
+      },
       COMMON_FLAGS.jsonValidation,
       {
         name: 'concurrency',

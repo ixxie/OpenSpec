@@ -686,9 +686,31 @@ The system will log all events.
     it.each(['ADDED', 'MODIFIED'] as const)(
       'should keep missing requirement text as an error for %s requirements',
       async operation => {
-        const changeDir = path.join(testDir, `test-change-missing-${operation.toLowerCase()}-text`);
+        // A real root layout with a canonical base for the MODIFIED variant,
+        // so the canonical-base cross-reference check stays quiet and the
+        // exact error count below keeps meaning "the missing-text error".
+        const changeDir = path.join(testDir, 'openspec', 'changes', `test-change-missing-${operation.toLowerCase()}-text`);
         const specsDir = path.join(changeDir, 'specs', 'test-spec');
         await fs.mkdir(specsDir, { recursive: true });
+        const canonicalDir = path.join(testDir, 'openspec', 'specs', 'test-spec');
+        await fs.mkdir(canonicalDir, { recursive: true });
+        await fs.writeFile(
+          path.join(canonicalDir, 'spec.md'),
+          `# Test Spec
+
+## Purpose
+Logging.
+
+## Requirements
+
+### Requirement: Logging Feature
+
+The system SHALL log all events.
+
+#### Scenario: Event occurs
+- **WHEN** an event occurs
+- **THEN** it is logged`
+        );
         await fs.writeFile(
           path.join(specsDir, 'spec.md'),
           `# Test Spec
@@ -1694,6 +1716,64 @@ The system SHALL do new things.
       expect(report.valid).toBe(false);
       expect(report.issues.some(i =>
         i.message.includes('canonical spec') && i.message.includes('does not exist')
+      )).toBe(true);
+    });
+
+    it('acceptCrossChangeBase does NOT extend to REMOVED: sister-pending target still errors', async () => {
+      // Sister change ADDS the requirement; my change tries to REMOVE it.
+      // The sister has not shipped and is still editable, so the removal
+      // belongs in the sister itself — the opt-in is MODIFIED-only.
+      await writeChange(testDir, 'session-text-drafts', 'composer-drafts', `
+## ADDED Requirements
+
+### Requirement: Per-session composer draft persistence
+
+The system SHALL persist drafts per session.
+
+#### Scenario: foo
+- **WHEN** user types
+- **THEN** draft saved
+`);
+      const changeDir = await writeChange(testDir, 'composer-session-isolation', 'composer-drafts', `
+## REMOVED Requirements
+
+- ### Requirement: Per-session composer draft persistence
+`);
+
+      const validator = new Validator({ acceptCrossChangeBase: true });
+      const report = await validator.validateChangeDeltaSpecs(changeDir);
+
+      expect(report.valid).toBe(false);
+      expect(report.issues.some(i =>
+        i.message.includes('REMOVED') && i.message.includes('make this edit in that change instead')
+      )).toBe(true);
+    });
+
+    it('acceptCrossChangeBase does NOT extend to RENAMED-from: sister-pending target still errors', async () => {
+      await writeChange(testDir, 'session-text-drafts', 'composer-drafts', `
+## ADDED Requirements
+
+### Requirement: Per-session composer draft persistence
+
+The system SHALL persist drafts per session.
+
+#### Scenario: foo
+- **WHEN** user types
+- **THEN** draft saved
+`);
+      const changeDir = await writeChange(testDir, 'composer-session-isolation', 'composer-drafts', `
+## RENAMED Requirements
+
+- FROM: \`### Requirement: Per-session composer draft persistence\`
+  TO: \`### Requirement: Draft persistence\`
+`);
+
+      const validator = new Validator({ acceptCrossChangeBase: true });
+      const report = await validator.validateChangeDeltaSpecs(changeDir);
+
+      expect(report.valid).toBe(false);
+      expect(report.issues.some(i =>
+        i.message.includes('RENAMED') && i.message.includes('make this edit in that change instead')
       )).toBe(true);
     });
 

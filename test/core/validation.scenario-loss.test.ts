@@ -151,7 +151,12 @@ describe('validate: MODIFIED blocks that would drop a main-spec scenario (#1477)
 
     const report = await validate(changeDir);
 
-    expect(report.valid).toBe(true);
+    // The loss guard has no base block to diff against, so it must not
+    // report — that is this test's subject. The canonical-base check
+    // (#1112) DOES error on this shape by default; only pin here that the
+    // error is not a loss report.
+    expect(report.issues.some((i) => i.message.includes('omits scenario(s)'))).toBe(false);
+    expect(report.issues.some((i) => i.message.includes('header not found in base'))).toBe(true);
   });
 
   it('stays silent when the main spec file does not exist yet', async () => {
@@ -163,7 +168,10 @@ describe('validate: MODIFIED blocks that would drop a main-spec scenario (#1477)
 
     const report = await validate(changeDir);
 
-    expect(report.valid).toBe(true);
+    // No main spec means nothing for the loss guard to protect; the
+    // canonical-base check (#1112) owns erroring on MODIFIED-without-base.
+    expect(report.issues.some((i) => i.message.includes('omits scenario(s)'))).toBe(false);
+    expect(report.issues.some((i) => i.message.includes('does not exist'))).toBe(true);
   });
 
   it('ignores a #### Scenario: sample inside a fenced block in the main spec', async () => {

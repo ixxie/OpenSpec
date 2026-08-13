@@ -28,6 +28,7 @@ import { FileSystemUtils } from '../../utils/file-system.js';
 import { discoverSpecFiles, hasAnyFileUnder } from '../../utils/spec-discovery.js';
 import {
   METADATA_FILENAME,
+  readRetireCapabilitiesMarker,
   readSkipSpecsMarker,
   resolveSchemaForChange,
 } from '../../utils/change-metadata.js';
@@ -42,10 +43,16 @@ export interface ValidatorOptions {
    */
   strictMode?: boolean;
   /**
-   * Accept a MODIFIED / REMOVED / RENAMED-from reference whose target
-   * Requirement is NOT present in the canonical spec (`openspec/specs/
-   * <cap>/spec.md`) IF the same header appears in a sister change at
-   * `openspec/changes/<other>/specs/<cap>/spec.md`.
+   * Accept a MODIFIED reference whose target Requirement is NOT present
+   * in the canonical spec (`openspec/specs/<cap>/spec.md`) IF the same
+   * header appears in a sister change at
+   * `openspec/changes/<other>/specs/<cap>/spec.md` — extending pending
+   * work before either change archives.
+   *
+   * MODIFIED only. REMOVED and RENAMED-from always require a canonical
+   * base: a sister-pending requirement is still editable, so removing
+   * or renaming it belongs in the sister change itself, and accepting
+   * it here would silently couple the two changes' archive order.
    *
    * Default false: write-time validate matches archive-time semantics
    * (the canonical spec is the only legitimate base) so authoring bugs
@@ -412,7 +419,7 @@ export class Validator {
         // succeeds (archive remains strict, no override).
         await this.checkDeltaAgainstCanonicalBase({
           changeDir,
-          specName,
+          specName: specId,
           entryPath,
           plan,
           issues,
@@ -979,16 +986,42 @@ export class Validator {
       return sisterNames;
     };
 
+    // The cross-change escape hatch applies to MODIFIED only: extending a
+    // sister's pending requirement is legitimate parallel authoring, but a
+    // sister-pending requirement is still editable, so REMOVED / RENAMED-from
+    // against it belongs in the sister change itself — accepting it here
+    // would silently couple the two changes' archive order.
+    const sisterEligible = (t: { kind: string }): boolean =>
+      this.acceptCrossChangeBase && t.kind === 'MODIFIED';
+
+    // A declared retirement (#1302) makes archive the oracle for REMOVED and
+    // RENAMED-from: the whole-file audit at archive time decides what may be
+    // deleted, including specs already gone from the working tree. Erroring
+    // here would refuse the exact deltas that flow supports. MODIFIED stays
+    // checked — retiring a capability never justifies modifying a requirement
+    // that has no base. Same fail-closed reader as validate/archive use.
+    const retirementDeclared = readRetireCapabilitiesMarker(changeDir).declared;
+    const deferToRetirement = (t: { kind: string }): boolean =>
+      retirementDeclared && t.kind !== 'MODIFIED';
+    const removeRenameFix =
+      'REMOVED and RENAMED-from always require a canonical base. If the Requirement lives in a sister-pending change, make this edit in that change instead — it has not shipped and is still editable.';
+
     // CREATE shape: canonical spec does not exist.
     if (canonicalNames === null) {
       for (const t of targets) {
-        if (this.acceptCrossChangeBase) {
+        if (deferToRetirement(t)) continue;
+        if (sisterEligible(t)) {
           const sis = await buildSisterNames();
           if (sis.has(t.normalized)) continue;
         }
-        const fix = this.acceptCrossChangeBase
-          ? 'No canonical spec, and no sister-pending change defines this Requirement either. Either change this to ADDED, or author the sister change first.'
-          : `${t.kind} requires an existing canonical spec at \`openspec/specs/${specName}/spec.md\`. Either change this to ADDED, or — if a sister change is creating this capability — re-run with \`--accept-cross-change-base\` (note: archive remains strict; you must archive the sister change first OR fold this change into it before archive succeeds).`;
+        let fix: string;
+        if (t.kind !== 'MODIFIED') {
+          fix = `${t.kind} requires an existing canonical spec at \`openspec/specs/${specName}/spec.md\`. ${removeRenameFix}`;
+        } else if (this.acceptCrossChangeBase) {
+          fix = 'No canonical spec, and no sister-pending change defines this Requirement either. Either change this to ADDED, or author the sister change first.';
+        } else {
+          fix = `MODIFIED requires an existing canonical spec at \`openspec/specs/${specName}/spec.md\`. Either change this to ADDED, or — if a sister change is creating this capability — re-run with \`--accept-cross-change-base\` (note: archive remains strict; you must archive the sister change first OR fold this change into it before archive succeeds).`;
+        }
         issues.push({
           level: 'ERROR',
           path: entryPath,
@@ -1001,13 +1034,19 @@ export class Validator {
     // Canonical exists: each target must be present by exact header match.
     for (const t of targets) {
       if (canonicalNames.has(t.normalized)) continue;
-      if (this.acceptCrossChangeBase) {
+      if (deferToRetirement(t)) continue;
+      if (sisterEligible(t)) {
         const sis = await buildSisterNames();
         if (sis.has(t.normalized)) continue;
       }
-      const fix = this.acceptCrossChangeBase
-        ? 'Not found in canonical AND not found in any sister-pending change. Did you mean ADDED with a new name? Or did you typo the header?'
-        : `Not found in canonical \`openspec/specs/${specName}/spec.md\`. Common causes: (a) the Requirement is genuinely new — use ADDED instead; (b) you typo'd the header (whitespace-insensitive match); (c) a sister change in \`openspec/changes/<other>/\` defines it and hasn't been archived — re-run with \`--accept-cross-change-base\` to opt into cross-change MODIFIED (archive remains strict, no override).`;
+      let fix: string;
+      if (t.kind !== 'MODIFIED') {
+        fix = `Not found in canonical \`openspec/specs/${specName}/spec.md\`. ${removeRenameFix}`;
+      } else if (this.acceptCrossChangeBase) {
+        fix = 'Not found in canonical AND not found in any sister-pending change. Did you mean ADDED with a new name? Or did you typo the header?';
+      } else {
+        fix = `Not found in canonical \`openspec/specs/${specName}/spec.md\`. Common causes: (a) the Requirement is genuinely new — use ADDED instead; (b) you typo'd the header (whitespace-insensitive match); (c) a sister change in \`openspec/changes/<other>/\` defines it and hasn't been archived — re-run with \`--accept-cross-change-base\` to opt into cross-change MODIFIED (archive remains strict, no override).`;
+      }
       issues.push({
         level: 'ERROR',
         path: entryPath,
