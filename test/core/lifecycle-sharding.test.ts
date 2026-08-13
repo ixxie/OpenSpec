@@ -5,6 +5,7 @@ import { SyncCommand } from '../../src/core/sync.js';
 import { createChange } from '../../src/utils/change-utils.js';
 import { getActiveChangeIds } from '../../src/utils/item-discovery.js';
 import { getAvailableChanges } from '../../src/commands/workflow/shared.js';
+import { JsonConverter } from '../../src/core/converters/json-converter.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -67,6 +68,16 @@ describe('change discovery across layouts', () => {
     expect(await resolveChangeDir(changes, '../outside')).toBeNull();
     expect(await resolveChangeDir(changes, '.hidden')).toBeNull();
     expect(await resolveChangeDir(changes, '')).toBeNull();
+  });
+
+  it('derives the change id, not the year shard, from a sharded path', async () => {
+    const changeDir = path.join(tempDir, 'openspec', 'changes', '2026', '03', '15-old-change');
+    await fs.mkdir(changeDir, { recursive: true });
+    const proposal = path.join(changeDir, 'proposal.md');
+    await fs.writeFile(proposal, '# Change: Old Change\n\n## Why\n\nBecause.\n\n## What Changes\n\n- stuff\n');
+
+    const parsed = JSON.parse(await new JsonConverter().convertChangeToJson(proposal));
+    expect(parsed.name).toBe('old-change');
   });
 
   it('the shared enumerators see sharded changes, not shard dirs', async () => {

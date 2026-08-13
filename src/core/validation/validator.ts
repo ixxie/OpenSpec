@@ -754,6 +754,15 @@ export class Validator {
     for (let i = parts.length - 1; i >= 0; i--) {
       if (parts[i] === 'specs' || parts[i] === 'changes') {
         if (i < parts.length - 1) {
+          // creation-date sharded layout: changes/YYYY/MM/DD-<name>/...
+          if (
+            parts[i] === 'changes' &&
+            /^\d{4}$/.test(parts[i + 1] ?? '') &&
+            /^\d{2}$/.test(parts[i + 2] ?? '') &&
+            /^\d{2}-./.test(parts[i + 3] ?? '')
+          ) {
+            return parts[i + 3].replace(/^\d{2}-/, '');
+          }
           return parts[i + 1];
         }
       }
