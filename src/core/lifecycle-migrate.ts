@@ -1,13 +1,17 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { resolveLifecycle } from './project-config.js';
+import { resolveLifecycle, type LifecycleMode } from './project-config.js';
+import { discoverChanges } from './change-discovery.js';
+import { SyncCommand } from './sync.js';
 
 const ARCHIVE_DIR_NAME = /^(\d{4})-(\d{2})-(\d{2})-(.+)$/;
+const SHARD_PATH = /^(\d{4})[/\\](\d{2})[/\\](\d{2})-(.+)$/;
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 export interface MigrateOptions {
   dryRun?: boolean;
+  to?: LifecycleMode;
 }
 
 interface PlannedMove {
@@ -19,27 +23,43 @@ interface PlannedMove {
 }
 
 /**
- * One-way migration from `lifecycle: archive` to `lifecycle: status`.
+ * Migration between lifecycle modes, in both directions. Neither direction
+ * touches spec text: archive-mode's `specs/` is folded shipped reality, which
+ * is exactly what status-mode maintains, so only bookkeeping moves — renames
+ * and a config line. That symmetry is what makes the experiment leaveable.
  *
- * - `changes/archive/YYYY-MM-DD-<name>/` → `changes/YYYY/MM/DD-<name>/` with
- *   `status: shipped`. The folder date's meaning shifts from archival to
- *   creation — the closest surviving record, and explicitly documented.
- * - `changes/<name>/` (active) → sharded by its metadata `created` date
- *   (today when absent) with `status: proposed` unless a status already exists.
- * - `openspec/config.yaml` gains `lifecycle: status`.
+ * → status: `changes/archive/YYYY-MM-DD-<name>/` becomes
+ *   `changes/YYYY/MM/DD-<name>/` with `status: shipped` (the folder date's
+ *   meaning shifts from archival to creation — the closest surviving record);
+ *   active flat changes shard by their `created` date as `status: proposed`.
+ *
+ * → archive: shipped changes return to `changes/archive/YYYY-MM-DD-<name>/`
+ *   (dates from the shard path), proposed changes return to flat
+ *   `changes/<name>/`, and the `status` key is stripped — under archive mode,
+ *   location is the state. Refuses while any shipped change has unfolded
+ *   deltas: the archive layout asserts folds that must actually exist.
  *
  * Metadata is edited tolerantly — raw YAML keys, no strict schema round-trip —
- * because legacy archived changes predate today's metadata contract and a
- * migration that drops fields it does not understand is a migration that
- * destroys history.
+ * because legacy changes predate today's metadata contract and a migration
+ * that drops fields it does not understand is a migration that destroys
+ * history.
  */
 export class MigrateCommand {
   async execute(targetPath: string = '.', options: MigrateOptions = {}): Promise<void> {
-    if (resolveLifecycle(targetPath) === 'status') {
-      console.log('Already on `lifecycle: status` — nothing to migrate.');
+    const target = options.to ?? 'status';
+    const current = resolveLifecycle(targetPath);
+    if (current === target) {
+      console.log(`Already on \`lifecycle: ${target}\` — nothing to migrate.`);
       return;
     }
+    if (target === 'status') {
+      await this.toStatus(targetPath, options);
+    } else {
+      await this.toArchive(targetPath, options);
+    }
+  }
 
+  private async toStatus(targetPath: string, options: MigrateOptions): Promise<void> {
     const openspecDir = path.join(targetPath, 'openspec');
     const changesDir = path.join(openspecDir, 'changes');
     const archiveDir = path.join(changesDir, 'archive');
@@ -51,7 +71,7 @@ export class MigrateCommand {
       const match = ARCHIVE_DIR_NAME.exec(entry);
       const [year, month, day, id] = match
         ? [match[1], match[2], match[3], match[4]]
-        : [...today.split('-'), entry] as [string, string, string, string];
+        : ([...today.split('-'), entry] as [string, string, string, string]);
       moves.push({
         from: path.join(archiveDir, entry),
         to: path.join(changesDir, year, month, `${day}-${id}`),
@@ -76,6 +96,81 @@ export class MigrateCommand {
       });
     }
 
+    await this.apply(moves, targetPath, options, async () => {
+      if (!(await this.dirs(archiveDir)).length) {
+        await fs.rm(archiveDir, { recursive: true, force: true });
+      }
+      await this.setLifecycle(openspecDir, 'status');
+      console.log('Migrated to `lifecycle: status`.');
+      console.log(
+        'Verify with `openspec sync --check`. Historical changes superseded by later edits to the same requirement may report unfolded — that is the base-snapshot gap, not a migration error; resolve by reviewing the named capability.'
+      );
+    });
+  }
+
+  private async toArchive(targetPath: string, options: MigrateOptions): Promise<void> {
+    const openspecDir = path.join(targetPath, 'openspec');
+    const changesDir = path.join(openspecDir, 'changes');
+    const archiveDir = path.join(changesDir, 'archive');
+    const today = new Date().toISOString().slice(0, 10);
+
+    // The archive layout asserts every archived change's fold happened, so a
+    // shipped-but-unfolded change must be folded (or unshipped) first. Reuse
+    // the gate itself rather than a parallel reimplementation of its verdict.
+    const exitBefore = process.exitCode;
+    const silencedLog = console.log;
+    console.log = () => {};
+    try {
+      await new SyncCommand().execute(undefined, targetPath, { check: true, json: true });
+    } finally {
+      console.log = silencedLog;
+    }
+    const gateRed = process.exitCode === 1 && exitBefore !== 1;
+    process.exitCode = exitBefore;
+    if (gateRed) {
+      throw new Error(
+        'Refusing to migrate to `lifecycle: archive`: a shipped change has unfolded deltas (the archive layout would assert a fold that never happened). Run `openspec sync` first.'
+      );
+    }
+
+    const moves: PlannedMove[] = [];
+    for (const change of await discoverChanges(changesDir)) {
+      const meta = await this.readRawMetadata(change.dir);
+      const rel = path.relative(changesDir, change.dir);
+      const shard = SHARD_PATH.exec(rel);
+      const created = shard
+        ? `${shard[1]}-${shard[2]}-${shard[3]}`
+        : DATE.test(String(meta?.created ?? ''))
+          ? String(meta?.created)
+          : today;
+      const shipped = meta?.status === 'shipped';
+      moves.push({
+        from: change.dir,
+        to: shipped
+          ? path.join(archiveDir, `${created}-${change.id}`)
+          : path.join(changesDir, change.id),
+        id: change.id,
+        status: shipped ? 'shipped' : 'proposed',
+        created,
+      });
+    }
+
+    await this.apply(moves, targetPath, options, async () => {
+      await this.pruneShardDirs(changesDir);
+      await this.setLifecycle(openspecDir, 'archive');
+      console.log('Migrated to `lifecycle: archive`.');
+      console.log(
+        'Note: changes shipped under status mode carry their creation date in the archive folder name, where convention reads an archival date.'
+      );
+    });
+  }
+
+  private async apply(
+    moves: PlannedMove[],
+    targetPath: string,
+    options: MigrateOptions,
+    finish: () => Promise<void>
+  ): Promise<void> {
     if (moves.length === 0) {
       console.log('No changes to migrate.');
     }
@@ -85,25 +180,17 @@ export class MigrateCommand {
         `  ${move.status === 'shipped' ? '✓' : '…'} ${move.id} → ${path.relative(targetPath, move.to)} [${move.status}]`
       );
       if (options.dryRun) continue;
+      if (move.from === move.to) continue;
       await fs.mkdir(path.dirname(move.to), { recursive: true });
       await fs.rename(move.from, move.to);
-      await this.stampMetadata(move, targetPath);
+      await this.stampMetadata(move, targetPath, options.to ?? 'status');
     }
 
     if (options.dryRun) {
       console.log('Dry run — nothing written.');
       return;
     }
-
-    if (!(await this.dirs(archiveDir)).length) {
-      await fs.rm(archiveDir, { recursive: true, force: true });
-    }
-    await this.setLifecycle(openspecDir);
-
-    console.log('Migrated to `lifecycle: status`.');
-    console.log(
-      'Verify with `openspec sync --check`. Historical changes superseded by later edits to the same requirement may report unfolded — that is the base-snapshot gap, not a migration error; resolve by reviewing the named capability.'
-    );
+    await finish();
   }
 
   private async dirs(dir: string): Promise<string[]> {
@@ -125,20 +212,38 @@ export class MigrateCommand {
     }
   }
 
-  private async stampMetadata(move: PlannedMove, targetPath: string): Promise<void> {
+  private async stampMetadata(
+    move: PlannedMove,
+    targetPath: string,
+    target: LifecycleMode
+  ): Promise<void> {
     const existing = (await this.readRawMetadata(move.to)) ?? {};
     const schema = existing.schema ?? (await this.projectSchema(targetPath));
-    const stamped = {
+    const stamped: Record<string, unknown> = {
       ...existing,
       schema,
       created: existing.created ?? move.created,
-      status: move.status,
     };
-    await fs.writeFile(
-      path.join(move.to, '.openspec.yaml'),
-      stringifyYaml(stamped),
-      'utf-8'
-    );
+    if (target === 'status') {
+      stamped.status = move.status;
+    } else {
+      // Under archive mode location is the state; a lingering status field
+      // would be a second, contradicting record.
+      delete stamped.status;
+    }
+    await fs.writeFile(path.join(move.to, '.openspec.yaml'), stringifyYaml(stamped), 'utf-8');
+  }
+
+  /** Remove now-empty YYYY/MM shard directories after a reverse migration. */
+  private async pruneShardDirs(changesDir: string): Promise<void> {
+    for (const year of await this.dirs(changesDir)) {
+      if (!/^\d{4}$/.test(year)) continue;
+      const yearDir = path.join(changesDir, year);
+      for (const month of await this.dirs(yearDir)) {
+        await fs.rmdir(path.join(yearDir, month)).catch(() => {});
+      }
+      await fs.rmdir(yearDir).catch(() => {});
+    }
   }
 
   private async projectSchema(targetPath: string): Promise<string> {
@@ -160,14 +265,20 @@ export class MigrateCommand {
     return null;
   }
 
-  private async setLifecycle(openspecDir: string): Promise<void> {
+  private async setLifecycle(openspecDir: string, mode: LifecycleMode): Promise<void> {
     for (const name of ['config.yaml', 'config.yml']) {
       const file = path.join(openspecDir, name);
       try {
         const raw = await fs.readFile(file, 'utf-8');
-        const updated = /^lifecycle:.*$/m.test(raw)
-          ? raw.replace(/^lifecycle:.*$/m, 'lifecycle: status')
-          : `${raw.trimEnd()}\nlifecycle: status\n`;
+        let updated: string;
+        if (mode === 'archive') {
+          // The default mode needs no line at all.
+          updated = raw.replace(/^lifecycle:.*\n?/m, '');
+        } else {
+          updated = /^lifecycle:.*$/m.test(raw)
+            ? raw.replace(/^lifecycle:.*$/m, 'lifecycle: status')
+            : `${raw.trimEnd()}\nlifecycle: status\n`;
+        }
         await fs.writeFile(file, updated, 'utf-8');
         return;
       } catch {
@@ -176,7 +287,7 @@ export class MigrateCommand {
     }
     await fs.writeFile(
       path.join(openspecDir, 'config.yaml'),
-      'schema: spec-driven\nlifecycle: status\n',
+      mode === 'status' ? 'schema: spec-driven\nlifecycle: status\n' : 'schema: spec-driven\n',
       'utf-8'
     );
   }
