@@ -19,7 +19,7 @@ import {
 } from '../core/version-check.js';
 import { ListCommand } from '../core/list.js';
 import { ArchiveCommand, type ArchiveOptions } from '../core/archive.js';
-import { SyncCommand } from '../core/sync.js';
+import { SyncCommand, ShipCommand } from '../core/sync.js';
 import { ViewCommand } from '../core/view.js';
 import { resolveRootForCommand, toRootOutput } from '../core/root-selection.js';
 import { registerSpecCommand } from '../commands/spec.js';
@@ -462,6 +462,21 @@ program
   .action(async (changeName?: string, options?: { check?: boolean; json?: boolean }) => {
     try {
       await new SyncCommand().execute(changeName, '.', options ?? {});
+    } catch (error) {
+      failWithError(error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('ship <change-name>')
+  .description(
+    'Declare a change shipped and fold its deltas into main specs, as one diff (projects with `lifecycle: status`)'
+  )
+  .option('--json', 'Output as JSON (non-interactive)')
+  .action(async (changeName: string, options?: { json?: boolean }) => {
+    try {
+      await new ShipCommand().execute(changeName, '.', options ?? {});
     } catch (error) {
       failWithError(error);
       process.exit(1);

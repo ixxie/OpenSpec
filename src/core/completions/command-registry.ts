@@ -200,6 +200,19 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
     ],
   },
   {
+    name: 'ship',
+    description: 'Declare a change shipped and fold its deltas into main specs (lifecycle: status projects)',
+    acceptsPositional: true,
+    positionalType: 'change-id',
+    positionals: [{ name: 'change-name', type: 'change-id' }],
+    flags: [
+      {
+        name: 'json',
+        description: 'Output as JSON (non-interactive)',
+      },
+    ],
+  },
+  {
     name: 'status',
     description: 'Display artifact completion status for a change',
     flags: [

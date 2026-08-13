@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { SyncCommand } from '../../src/core/sync.js';
+import { SyncCommand, ShipCommand } from '../../src/core/sync.js';
 import { ArchiveCommand } from '../../src/core/archive.js';
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -114,6 +114,32 @@ describe('SyncCommand', () => {
     await expect(
       new SyncCommand().execute('add-oauth', tempDir, {})
     ).rejects.toThrow(/only shipped changes fold/);
+  });
+
+  it('ship flips status and folds in one step; re-ship is a no-op', async () => {
+    await scaffold({ lifecycle: 'status', status: 'proposed' });
+
+    await new ShipCommand().execute('add-oauth', tempDir, {});
+    expect(process.exitCode).toBeUndefined();
+    const metadata = await fs.readFile(
+      path.join(tempDir, 'openspec', 'changes', 'add-oauth', '.openspec.yaml'),
+      'utf-8'
+    );
+    expect(metadata).toContain('status: shipped');
+    const folded = await fs.readFile(targetSpec(), 'utf-8');
+    expect(folded).toContain('OAuth login');
+
+    process.exitCode = undefined;
+    await new ShipCommand().execute('add-oauth', tempDir, {});
+    expect(process.exitCode).toBeUndefined();
+    expect(await fs.readFile(targetSpec(), 'utf-8')).toBe(folded);
+  });
+
+  it('ship refuses under lifecycle: archive and points at the archive workflow', async () => {
+    await scaffold({ lifecycle: 'archive', status: 'proposed' });
+    await expect(
+      new ShipCommand().execute('add-oauth', tempDir, {})
+    ).rejects.toThrow(/openspec archive/);
   });
 });
 

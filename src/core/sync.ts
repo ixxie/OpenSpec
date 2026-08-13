@@ -7,7 +7,11 @@ import {
   writeUpdatedSpec,
   type SpecUpdate,
 } from './specs-apply.js';
-import { readChangeMetadata, ChangeMetadataError } from '../utils/change-metadata.js';
+import {
+  readChangeMetadata,
+  writeChangeMetadata,
+  ChangeMetadataError,
+} from '../utils/change-metadata.js';
 import { resolveLifecycle } from './project-config.js';
 
 export interface SyncOptions {
@@ -220,5 +224,47 @@ export class SyncCommand {
         console.log(`  ✗ ${change.change} — ${change.error}`);
       }
     }
+  }
+}
+
+/**
+ * Declare a change shipped and fold its deltas — the two halves of the old
+ * archive, minus the move, emitted as one working-tree diff so the commit
+ * that declares "shipped" is the same commit whose tree satisfies the
+ * shipped ⇒ folded predicate. Restores archive's declare+fold atomicity as
+ * a convenience instead of a mandate: `ship` is sugar over editing the
+ * status field and running `sync` by hand, never the only way.
+ */
+export class ShipCommand {
+  async execute(
+    changeName: string,
+    targetPath: string = '.',
+    options: { json?: boolean } = {}
+  ): Promise<void> {
+    const mode = resolveLifecycle(targetPath);
+    if (mode !== 'status') {
+      throw new Error(
+        'This project uses `lifecycle: archive` (the default) — finish changes with `openspec archive`. `openspec ship` applies under `lifecycle: status`; see openspec/config.yaml.'
+      );
+    }
+
+    const changeDir = path.join(targetPath, 'openspec', 'changes', changeName);
+    const metadata = readChangeMetadata(changeDir, targetPath);
+    if (!metadata) {
+      throw new Error(
+        `Change '${changeName}' has no .openspec.yaml — nothing records its lifecycle state.`
+      );
+    }
+
+    if (metadata.status !== 'shipped') {
+      writeChangeMetadata(changeDir, { ...metadata, status: 'shipped' }, targetPath);
+      if (!options.json) {
+        console.log(`  ${changeName}: status → shipped`);
+      }
+    } else if (!options.json) {
+      console.log(`  ${changeName}: already shipped`);
+    }
+
+    await new SyncCommand().execute(changeName, targetPath, { json: options.json });
   }
 }
