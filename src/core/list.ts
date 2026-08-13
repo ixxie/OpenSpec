@@ -118,6 +118,12 @@ export class ListCommand {
   async execute(targetPath: string = '.', mode: 'changes' | 'specs' = 'changes', options: ListOptions = {}): Promise<void> {
     const { sort = 'recent', json = false, root } = options;
 
+    if (options.status && !LIFECYCLE_STATES.has(options.status)) {
+      throw new Error(
+        `Unknown status '${options.status}' — expected one of: ${[...LIFECYCLE_STATES].join(', ')}.`
+      );
+    }
+
     if (mode === 'changes') {
       const changesDir = path.join(targetPath, 'openspec', 'changes');
 

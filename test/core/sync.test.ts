@@ -71,42 +71,70 @@ describe('SyncCommand', () => {
 
   it('reports nothing to gate under lifecycle: archive', async () => {
     await scaffold({ lifecycle: 'archive', status: 'shipped' });
-    await new SyncCommand().execute(undefined, tempDir, { check: true });
-    expect(process.exitCode).toBeUndefined();
+    const report = await new SyncCommand().execute(undefined, tempDir, { check: true });
+    expect(report.clean).toBe(true);
+    expect(report.mode).toBe('archive');
     expect(logs.join('\n')).toContain('lifecycle: archive');
   });
 
   it('check fails on a shipped change whose delta is not folded', async () => {
     await scaffold({ lifecycle: 'status', status: 'shipped' });
-    await new SyncCommand().execute(undefined, tempDir, { check: true });
-    expect(process.exitCode).toBe(1);
+    const report = await new SyncCommand().execute(undefined, tempDir, { check: true });
+    expect(report.clean).toBe(false);
     expect(logs.join('\n')).toContain('add-oauth');
     expect(logs.join('\n')).toContain('auth');
   });
 
   it('ignores proposed changes: their deltas stay out of specs/', async () => {
     await scaffold({ lifecycle: 'status', status: 'proposed' });
-    await new SyncCommand().execute(undefined, tempDir, { check: true });
-    expect(process.exitCode).toBeUndefined();
+    const report = await new SyncCommand().execute(undefined, tempDir, { check: true });
+    expect(report.clean).toBe(true);
     await expect(fs.access(targetSpec())).rejects.toThrow();
   });
 
   it('folds a shipped change, then check passes and a re-run is a no-op', async () => {
     await scaffold({ lifecycle: 'status', status: 'shipped' });
 
-    await new SyncCommand().execute(undefined, tempDir, {});
-    expect(process.exitCode).toBeUndefined();
+    const fold = await new SyncCommand().execute(undefined, tempDir, {});
+    expect(fold.clean).toBe(true);
     const folded = await fs.readFile(targetSpec(), 'utf-8');
     expect(folded).toContain('OAuth login');
 
-    process.exitCode = undefined;
     logs = [];
-    await new SyncCommand().execute(undefined, tempDir, { check: true });
-    expect(process.exitCode).toBeUndefined();
+    const check = await new SyncCommand().execute(undefined, tempDir, { check: true });
+    expect(check.clean).toBe(true);
 
     await new SyncCommand().execute(undefined, tempDir, {});
     const refolded = await fs.readFile(targetSpec(), 'utf-8');
     expect(refolded).toBe(folded);
+  });
+
+  it('silent mode emits nothing and still returns the report', async () => {
+    await scaffold({ lifecycle: 'status', status: 'shipped' });
+    const report = await new SyncCommand().execute(undefined, tempDir, {
+      check: true,
+      silent: true,
+    });
+    expect(report.clean).toBe(false);
+    expect(logs).toEqual([]);
+  });
+
+  it('reports unreadable metadata as the same conflict entry named or swept', async () => {
+    await scaffold({ lifecycle: 'status', status: 'shipped' });
+    await fs.writeFile(
+      path.join(tempDir, 'openspec', 'changes', 'add-oauth', '.openspec.yaml'),
+      'status: [unclosed\n'
+    );
+
+    const swept = await new SyncCommand().execute(undefined, tempDir, { check: true, silent: true });
+    const named = await new SyncCommand().execute('add-oauth', tempDir, { check: true, silent: true });
+
+    for (const report of [swept, named]) {
+      expect(report.clean).toBe(false);
+      expect(report.changes).toHaveLength(1);
+      expect(report.changes[0].state).toBe('conflict');
+      expect(report.changes[0].error).toBeTruthy();
+    }
   });
 
   it('refuses to fold an explicitly named change that is not shipped', async () => {
@@ -119,8 +147,8 @@ describe('SyncCommand', () => {
   it('ship flips status and folds in one step; re-ship is a no-op', async () => {
     await scaffold({ lifecycle: 'status', status: 'proposed' });
 
-    await new ShipCommand().execute('add-oauth', tempDir, {});
-    expect(process.exitCode).toBeUndefined();
+    const shipped = await new ShipCommand().execute('add-oauth', tempDir, {});
+    expect(shipped.clean).toBe(true);
     const metadata = await fs.readFile(
       path.join(tempDir, 'openspec', 'changes', 'add-oauth', '.openspec.yaml'),
       'utf-8'
@@ -129,9 +157,8 @@ describe('SyncCommand', () => {
     const folded = await fs.readFile(targetSpec(), 'utf-8');
     expect(folded).toContain('OAuth login');
 
-    process.exitCode = undefined;
-    await new ShipCommand().execute('add-oauth', tempDir, {});
-    expect(process.exitCode).toBeUndefined();
+    const reshipped = await new ShipCommand().execute('add-oauth', tempDir, {});
+    expect(reshipped.clean).toBe(true);
     expect(await fs.readFile(targetSpec(), 'utf-8')).toBe(folded);
   });
 

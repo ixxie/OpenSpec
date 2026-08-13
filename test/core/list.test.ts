@@ -48,6 +48,17 @@ describe('ListCommand', () => {
       expect(logOutput).toEqual(['No active changes found.']);
     });
 
+    it('rejects an unknown --status value instead of silently matching nothing', async () => {
+      const changesDir = path.join(tempDir, 'openspec', 'changes');
+      await fs.mkdir(changesDir, { recursive: true });
+
+      const listCommand = new ListCommand();
+
+      await expect(
+        listCommand.execute(tempDir, 'changes', { status: 'bogus' })
+      ).rejects.toThrow(/Unknown status 'bogus'/);
+    });
+
     it('should not report a malformed openspec/changes path as empty', async () => {
       await fs.mkdir(path.join(tempDir, 'openspec'), { recursive: true });
       await fs.writeFile(path.join(tempDir, 'openspec', 'changes'), 'not a directory\n');

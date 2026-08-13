@@ -17,6 +17,8 @@ import { resolveLifecycle } from './project-config.js';
 export interface SyncOptions {
   check?: boolean;
   json?: boolean;
+  /** Suppress all output — programmatic callers read the returned report. */
+  silent?: boolean;
 }
 
 type PendingFold = {
@@ -57,7 +59,7 @@ export class SyncCommand {
     changeName: string | undefined,
     targetPath: string = '.',
     options: SyncOptions = {}
-  ): Promise<void> {
+  ): Promise<SyncReport> {
     const mode = resolveLifecycle(targetPath);
     const report: SyncReport = { mode, changes: [], clean: true };
 
@@ -65,6 +67,9 @@ export class SyncCommand {
       // Mode-aware by contract: under `lifecycle: archive` the archive command
       // owns the fold and there is no status field to gate on. Report and exit
       // 0 rather than misfiring on the default layout.
+      if (options.silent) {
+        return report;
+      }
       if (options.json) {
         console.log(JSON.stringify(report, null, 2));
       } else {
@@ -72,7 +77,7 @@ export class SyncCommand {
           "This project uses `lifecycle: archive` (the default) — nothing to sync or gate. `openspec sync` applies under `lifecycle: status`; see openspec/config.yaml."
         );
       }
-      return;
+      return report;
     }
 
     const changesDir = path.join(targetPath, 'openspec', 'changes');
@@ -95,7 +100,7 @@ export class SyncCommand {
       if (!options.check && state.report.state === 'unfolded') {
         for (const fold of state.folds) {
           await writeUpdatedSpec(fold.update, fold.rebuilt, fold.counts, {
-            silent: options.json,
+            silent: options.json || options.silent,
           });
         }
         state.report.state = 'folded';
@@ -103,15 +108,15 @@ export class SyncCommand {
       }
     }
 
-    if (options.json) {
-      console.log(JSON.stringify(report, null, 2));
-    } else {
-      this.print(report, options);
+    if (!options.silent) {
+      if (options.json) {
+        console.log(JSON.stringify(report, null, 2));
+      } else {
+        this.print(report, options);
+      }
     }
 
-    if (!report.clean) {
-      process.exitCode = 1;
-    }
+    return report;
   }
 
   private async shippedChanges(
@@ -166,7 +171,22 @@ export class SyncCommand {
 
     // An explicitly named change must be shipped before its deltas may touch
     // specs/. In check mode a non-shipped change is simply not gated.
-    const metadata = readChangeMetadata(changeDir, projectRoot);
+    // Unreadable metadata is the same conflict entry the no-arg sweep reports,
+    // so CI sees one shape either way.
+    let metadata;
+    try {
+      metadata = readChangeMetadata(changeDir, projectRoot);
+    } catch (err) {
+      return {
+        report: {
+          change: name,
+          state: 'conflict',
+          pending: [],
+          error: err instanceof ChangeMetadataError ? err.message : String(err),
+        },
+        folds: [],
+      };
+    }
     if (metadata?.status !== 'shipped') {
       if (options.check) {
         return null;
@@ -240,7 +260,7 @@ export class ShipCommand {
     changeName: string,
     targetPath: string = '.',
     options: { json?: boolean } = {}
-  ): Promise<void> {
+  ): Promise<SyncReport> {
     const mode = resolveLifecycle(targetPath);
     if (mode !== 'status') {
       throw new Error(
@@ -265,6 +285,6 @@ export class ShipCommand {
       console.log(`  ${changeName}: already shipped`);
     }
 
-    await new SyncCommand().execute(changeName, targetPath, { json: options.json });
+    return new SyncCommand().execute(changeName, targetPath, { json: options.json });
   }
 }

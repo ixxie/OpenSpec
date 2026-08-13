@@ -461,7 +461,10 @@ program
   .option('--json', 'Output as JSON (non-interactive)')
   .action(async (changeName?: string, options?: { check?: boolean; json?: boolean }) => {
     try {
-      await new SyncCommand().execute(changeName, '.', options ?? {});
+      const report = await new SyncCommand().execute(changeName, '.', options ?? {});
+      if (!report.clean) {
+        process.exitCode = 1;
+      }
     } catch (error) {
       failWithError(error);
       process.exit(1);
@@ -476,7 +479,10 @@ program
   .option('--json', 'Output as JSON (non-interactive)')
   .action(async (changeName: string, options?: { json?: boolean }) => {
     try {
-      await new ShipCommand().execute(changeName, '.', options ?? {});
+      const report = await new ShipCommand().execute(changeName, '.', options ?? {});
+      if (!report.clean) {
+        process.exitCode = 1;
+      }
     } catch (error) {
       failWithError(error);
       process.exit(1);
