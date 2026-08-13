@@ -214,8 +214,14 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
   },
   {
     name: 'migrate',
-    description: 'Migrate from lifecycle: archive to lifecycle: status',
+    description: 'Migrate between lifecycle modes (default: to lifecycle: status)',
     flags: [
+      {
+        name: 'to',
+        description: 'Target lifecycle mode',
+        takesValue: true,
+        values: ['status', 'archive'],
+      },
       {
         name: 'dry-run',
         description: 'Print the migration plan without writing anything',

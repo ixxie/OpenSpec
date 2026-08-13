@@ -493,12 +493,17 @@ program
 program
   .command('migrate')
   .description(
-    'Migrate this project from `lifecycle: archive` to `lifecycle: status` (archived changes become shipped, sharded by date; nothing is deleted)'
+    'Migrate this project between lifecycle modes (default: to `lifecycle: status`). Both directions move only bookkeeping; nothing is deleted and no spec text changes'
   )
+  .option('--to <mode>', 'Target lifecycle mode: "status" (default) or "archive"', 'status')
   .option('--dry-run', 'Print the migration plan without writing anything')
-  .action(async (options?: { dryRun?: boolean }) => {
+  .action(async (options?: { to?: string; dryRun?: boolean }) => {
     try {
-      await new MigrateCommand().execute('.', options ?? {});
+      const to = options?.to ?? 'status';
+      if (to !== 'status' && to !== 'archive') {
+        throw new Error(`Unknown lifecycle mode '${to}' (expected 'status' or 'archive')`);
+      }
+      await new MigrateCommand().execute('.', { to, dryRun: options?.dryRun });
     } catch (error) {
       failWithError(error);
       process.exit(1);

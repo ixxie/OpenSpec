@@ -124,10 +124,25 @@ describe('MigrateCommand', () => {
     await fs.writeFile(path.join(archived, 'specs', 'auth', 'spec.md'), DELTA);
 
     const active = path.join(openspec, 'changes', 'batch-upload');
-    await fs.mkdir(active, { recursive: true });
+    await fs.mkdir(path.join(active, 'specs', 'beacons'), { recursive: true });
     await fs.writeFile(
       path.join(active, '.openspec.yaml'),
       'schema: spec-driven\ncreated: 2026-08-01\n'
+    );
+    await fs.writeFile(
+      path.join(active, 'specs', 'beacons', 'spec.md'),
+      `# Beacons - Changes
+
+## ADDED Requirements
+
+### Requirement: Batched upload
+
+The system SHALL accept batched readings.
+
+#### Scenario: Replay
+- **WHEN** a gateway replays a batch
+- **THEN** all readings are accepted
+`
     );
   });
 
@@ -179,5 +194,48 @@ describe('MigrateCommand', () => {
     logs = [];
     await new MigrateCommand().execute(tempDir, {});
     expect(logs.join('\n')).toContain('Already on');
+  });
+
+  it('round-trips: migrate → migrate --to archive restores the legacy layout', async () => {
+    await new MigrateCommand().execute(tempDir, {});
+    await new MigrateCommand().execute(tempDir, { to: 'archive' });
+
+    // Shipped change back in archive/ under its date; active change flat.
+    const archived = path.join(
+      tempDir, 'openspec', 'changes', 'archive', '2026-03-15-add-user-auth'
+    );
+    await expect(fs.access(archived)).resolves.not.toThrow();
+    await expect(
+      fs.access(path.join(tempDir, 'openspec', 'changes', 'batch-upload'))
+    ).resolves.not.toThrow();
+
+    // Location is the state again: no status key survives.
+    const archivedMeta = await fs.readFile(path.join(archived, '.openspec.yaml'), 'utf-8');
+    expect(archivedMeta).not.toContain('status:');
+    expect(archivedMeta).toContain('created: 2026-03-15');
+
+    // Shard dirs pruned; config back to the default mode.
+    await expect(
+      fs.access(path.join(tempDir, 'openspec', 'changes', '2026'))
+    ).rejects.toThrow();
+    const config = await fs.readFile(path.join(tempDir, 'openspec', 'config.yaml'), 'utf-8');
+    expect(config).not.toContain('lifecycle:');
+  });
+
+  it('refuses --to archive while a shipped change has unfolded deltas', async () => {
+    await new MigrateCommand().execute(tempDir, {});
+    // Flip the proposed change to shipped WITHOUT folding: gate red.
+    const meta = path.join(
+      tempDir, 'openspec', 'changes', '2026', '08', '01-batch-upload', '.openspec.yaml'
+    );
+    await fs.writeFile(
+      meta,
+      (await fs.readFile(meta, 'utf-8')).replace('status: proposed', 'status: shipped')
+    );
+
+    await expect(
+      new MigrateCommand().execute(tempDir, { to: 'archive' })
+    ).rejects.toThrow(/unfolded deltas/);
+    expect(process.exitCode).toBeUndefined();
   });
 });
