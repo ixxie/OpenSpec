@@ -44,7 +44,7 @@ describe('SyncCommand', () => {
 
   async function scaffold(options: {
     lifecycle?: 'archive' | 'status';
-    status?: 'proposed' | 'applied' | 'shipped';
+    status?: 'proposed' | 'shipped';
   }): Promise<void> {
     const openspec = path.join(tempDir, 'openspec');
     await fs.mkdir(path.join(openspec, 'specs'), { recursive: true });
@@ -110,7 +110,7 @@ describe('SyncCommand', () => {
   });
 
   it('refuses to fold an explicitly named change that is not shipped', async () => {
-    await scaffold({ lifecycle: 'status', status: 'applied' });
+    await scaffold({ lifecycle: 'status', status: 'proposed' });
     await expect(
       new SyncCommand().execute('add-oauth', tempDir, {})
     ).rejects.toThrow(/only shipped changes fold/);

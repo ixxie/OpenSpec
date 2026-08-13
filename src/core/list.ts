@@ -23,7 +23,7 @@ interface ListOptions {
   status?: string;
 }
 
-const LIFECYCLE_STATES = new Set(['proposed', 'applied', 'shipped']);
+const LIFECYCLE_STATES = new Set(['proposed', 'shipped']);
 
 // Non-throwing: list must render even when a change's metadata would fail the
 // stricter contract readChangeMetadata enforces — a broken change is status's

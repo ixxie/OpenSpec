@@ -314,7 +314,7 @@ program
   .option('--specs', 'List specs instead of changes')
   .option('--changes', 'List changes explicitly (default)')
   .option('--sort <order>', 'Sort order: "recent" (default) or "name"', 'recent')
-  .option('--status <state>', 'Filter changes by lifecycle status (proposed, applied, shipped)')
+  .option('--status <state>', 'Filter changes by lifecycle status (proposed, shipped)')
   .option('--json', 'Output as JSON (for programmatic use)')
   .option('--store <id>', STORE_OPTION_DESCRIPTION)
   .addOption(hiddenStorePathOption())

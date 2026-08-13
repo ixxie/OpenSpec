@@ -70,9 +70,9 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
       },
       {
         name: 'status',
-        description: 'Filter changes by lifecycle status (proposed, applied, shipped)',
+        description: 'Filter changes by lifecycle status (proposed, shipped)',
         takesValue: true,
-        values: ['proposed', 'applied', 'shipped'],
+        values: ['proposed', 'shipped'],
       },
       COMMON_FLAGS.json,
       COMMON_FLAGS.store,

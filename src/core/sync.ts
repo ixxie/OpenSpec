@@ -43,7 +43,7 @@ export interface SyncReport {
  * Fold shipped changes' spec deltas into the main specs — the text-merge half
  * of what archive does, decoupled from any directory move so it can run at any
  * time, idempotently. Only changes declaring `status: shipped` fold; proposed
- * and applied changes' deltas stay out of specs/, which is what keeps
+ * changes' deltas stay out of specs/, which is what keeps
  * specs/ = shipped reality when state is data instead of location.
  *
  * "Folded" is decided by regeneration, not bookkeeping: a change is in sync

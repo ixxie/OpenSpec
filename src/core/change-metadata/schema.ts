@@ -48,11 +48,14 @@ export const ChangeMetadataSchema = z.object({
   retire_capabilities: z.boolean().optional(),
   // Lifecycle state under `lifecycle: status` mode: the change's position in
   // its life is data, not directory location, and nothing ever moves. Closed
-  // set because tooling attaches consequences to each category: `sync` folds
-  // only shipped changes' deltas into specs/, and overlap/drift tooling treats
-  // proposed/applied as holding a live claim on the requirements they touch.
+  // set because tooling attaches consequences to each state: `sync` folds
+  // only shipped changes' deltas into specs/, and a proposed change holds a
+  // live claim on the requirements it touches (what overlap/drift tooling
+  // reasons over). Deliberately two states: implementation progress is
+  // already carried by tasks.md checkboxes, and a status with no machine
+  // consequences would just be a comment that can drift from them.
   // Absent on projects using the default `lifecycle: archive` mode.
-  status: z.enum(['proposed', 'applied', 'shipped']).optional(),
+  status: z.enum(['proposed', 'shipped']).optional(),
 });
 
 export type ChangeMetadata = z.infer<typeof ChangeMetadataSchema>;
