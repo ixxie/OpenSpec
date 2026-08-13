@@ -63,11 +63,21 @@ export async function discoverChanges(changesDir: string): Promise<DiscoveredCha
  * Resolve a change id to its directory in either layout. Throws when the id
  * is ambiguous — two shard dates carrying the same name — because guessing
  * would silently act on the wrong change. Ids that could never come out of
- * discovery (path separators, dot segments, hidden names) resolve to null so
- * a hostile id cannot address anything outside changes/.
+ * discovery (path separators, dot segments, hidden names, shard and archive
+ * dir names) resolve to null, so the resolver and discovery agree on the
+ * addressable namespace and a hostile id cannot address anything outside
+ * changes/.
  */
 export async function resolveChangeDir(changesDir: string, id: string): Promise<string | null> {
-  if (!id || id.startsWith('.') || id.includes('/') || id.includes('\\') || id.includes('\0')) {
+  if (
+    !id ||
+    id === 'archive' ||
+    YEAR_DIR.test(id) ||
+    id.startsWith('.') ||
+    id.includes('/') ||
+    id.includes('\\') ||
+    id.includes('\0')
+  ) {
     return null;
   }
   const flat = path.join(changesDir, id);
@@ -85,4 +95,34 @@ export async function resolveChangeDir(changesDir: string, id: string): Promise<
     );
   }
   return matches[0]?.dir ?? null;
+}
+
+/**
+ * Derive an item's name from a file path inside it: the segment after the
+ * innermost `specs` or `changes` directory, minus the `DD-` prefix when the
+ * path runs through a creation-date shard (`changes/YYYY/MM/DD-<name>/...`).
+ * Falls back to the file name without extension.
+ */
+export function itemNameFromPath(filePath: string): string {
+  const parts = filePath.split(/[/\\]/);
+
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i] === 'specs' || parts[i] === 'changes') {
+      if (i < parts.length - 1) {
+        if (
+          parts[i] === 'changes' &&
+          YEAR_DIR.test(parts[i + 1] ?? '') &&
+          MONTH_DIR.test(parts[i + 2] ?? '') &&
+          DAY_PREFIX.test(parts[i + 3] ?? '')
+        ) {
+          return parts[i + 3].replace(DAY_PREFIX, '');
+        }
+        return parts[i + 1];
+      }
+    }
+  }
+
+  const fileName = parts[parts.length - 1] ?? '';
+  const dotIndex = fileName.lastIndexOf('.');
+  return dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName;
 }

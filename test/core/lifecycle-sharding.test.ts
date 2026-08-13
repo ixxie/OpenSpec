@@ -70,6 +70,15 @@ describe('change discovery across layouts', () => {
     expect(await resolveChangeDir(changes, '')).toBeNull();
   });
 
+  it('never hands out shard or archive dirs as changes', async () => {
+    const changes = path.join(tempDir, 'changes');
+    await fs.mkdir(path.join(changes, '2026', '03', '15-real'), { recursive: true });
+    await fs.mkdir(path.join(changes, 'archive'), { recursive: true });
+
+    expect(await resolveChangeDir(changes, '2026')).toBeNull();
+    expect(await resolveChangeDir(changes, 'archive')).toBeNull();
+  });
+
   it('derives the change id, not the year shard, from a sharded path', async () => {
     const changeDir = path.join(tempDir, 'openspec', 'changes', '2026', '03', '15-old-change');
     await fs.mkdir(changeDir, { recursive: true });
