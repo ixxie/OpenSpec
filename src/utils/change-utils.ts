@@ -183,13 +183,16 @@ export async function createChange(
   // half-root behind that doctor immediately calls unhealthy: ensure
   // specs/ and changes/archive/ exist, and write a config only when
   // none exists. The config records the PROJECT default schema, never
-  // a one-change --schema override.
+  // a one-change --schema override. Under `lifecycle: status` there is
+  // no archive directory to scaffold — state lives in metadata.
   const openspecDir = path.join(projectRoot, 'openspec');
 
   // Create the directory (including parent directories if needed)
   await FileSystemUtils.createDirectory(changeDir);
   await FileSystemUtils.createDirectory(path.join(openspecDir, 'specs'));
-  await FileSystemUtils.createDirectory(path.join(openspecDir, 'changes', 'archive'));
+  if (resolveLifecycle(projectRoot) !== 'status') {
+    await FileSystemUtils.createDirectory(path.join(openspecDir, 'changes', 'archive'));
+  }
   const configPath = path.join(openspecDir, 'config.yaml');
   const configYmlPath = path.join(openspecDir, 'config.yml');
   if (
