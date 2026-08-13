@@ -111,6 +111,12 @@ describe('change discovery across layouts', () => {
     expect(rel).toMatch(/^\d{4}[/\\]\d{2}[/\\]\d{2}-fresh-change$/);
     const metadata = await fs.readFile(path.join(result.changeDir, '.openspec.yaml'), 'utf-8');
     expect(metadata).toContain('status: proposed');
+
+    // The root-completion scaffold must not resurrect the directory the
+    // mode abolished.
+    await expect(
+      fs.access(path.join(tempDir, 'openspec', 'changes', 'archive'))
+    ).rejects.toThrow();
   });
 });
 
