@@ -3,6 +3,8 @@ import { discoverChanges, resolveChangeDir } from '../../src/core/change-discove
 import { MigrateCommand } from '../../src/core/lifecycle-migrate.js';
 import { SyncCommand } from '../../src/core/sync.js';
 import { createChange } from '../../src/utils/change-utils.js';
+import { getActiveChangeIds } from '../../src/utils/item-discovery.js';
+import { getAvailableChanges } from '../../src/commands/workflow/shared.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -55,6 +57,26 @@ describe('change discovery across layouts', () => {
     await fs.mkdir(path.join(changes, '2026', '04', '01-dupe'), { recursive: true });
 
     await expect(resolveChangeDir(changes, 'dupe')).rejects.toThrow(/ambiguous/);
+  });
+
+  it('resolves hostile ids to null instead of escaping changes/', async () => {
+    const changes = path.join(tempDir, 'changes');
+    await fs.mkdir(path.join(changes, 'real-change'), { recursive: true });
+
+    expect(await resolveChangeDir(changes, '..')).toBeNull();
+    expect(await resolveChangeDir(changes, '../outside')).toBeNull();
+    expect(await resolveChangeDir(changes, '.hidden')).toBeNull();
+    expect(await resolveChangeDir(changes, '')).toBeNull();
+  });
+
+  it('the shared enumerators see sharded changes, not shard dirs', async () => {
+    const changes = path.join(tempDir, 'openspec', 'changes');
+    await fs.mkdir(path.join(changes, 'flat-change'), { recursive: true });
+    await fs.mkdir(path.join(changes, '2026', '03', '15-old-change'), { recursive: true });
+    await fs.mkdir(path.join(changes, 'archive', '2026-01-01-buried'), { recursive: true });
+
+    expect(await getActiveChangeIds(tempDir)).toEqual(['flat-change', 'old-change']);
+    expect(await getAvailableChanges(tempDir)).toEqual(['flat-change', 'old-change']);
   });
 
   it('createChange shards by creation date under lifecycle: status', async () => {
@@ -184,9 +206,66 @@ The system SHALL accept batched readings.
 
     // The migrated shipped change re-verifies: its delta re-applied to the
     // already-folded spec is a no-op, so the gate passes.
-    process.exitCode = undefined;
-    await new SyncCommand().execute(undefined, tempDir, { check: true });
-    expect(process.exitCode).toBeUndefined();
+    const gate = await new SyncCommand().execute(undefined, tempDir, {
+      check: true,
+      silent: true,
+    });
+    expect(gate.clean).toBe(true);
+  });
+
+  it('refuses to migrate when a legacy name reuse would shard into an ambiguous id', async () => {
+    // Reusing an archived change's name is idiomatic under archive mode — the
+    // date prefix exists to allow it — but bare ids cannot address two shards.
+    const reused = path.join(tempDir, 'openspec', 'changes', 'add-user-auth');
+    await fs.mkdir(reused, { recursive: true });
+
+    await expect(new MigrateCommand().execute(tempDir, { dryRun: true })).rejects.toThrow(
+      /ambiguous/
+    );
+    await expect(new MigrateCommand().execute(tempDir, {})).rejects.toThrow(/add-user-auth/);
+
+    // Nothing moved: the plan was refused before the first rename.
+    await expect(
+      fs.access(path.join(tempDir, 'openspec', 'changes', 'archive', '2026-03-15-add-user-auth'))
+    ).resolves.not.toThrow();
+    const config = await fs.readFile(path.join(tempDir, 'openspec', 'config.yaml'), 'utf-8');
+    expect(config).not.toContain('lifecycle: status');
+  });
+
+  it('resumes after an interrupted migration instead of renaming shards into themselves', async () => {
+    // Simulate a crash after the archived change moved but before the flat
+    // scan, the archive cleanup, and the config flip.
+    const changes = path.join(tempDir, 'openspec', 'changes');
+    const shard = path.join(changes, '2026', '03', '15-add-user-auth');
+    await fs.mkdir(path.dirname(shard), { recursive: true });
+    await fs.rename(path.join(changes, 'archive', '2026-03-15-add-user-auth'), shard);
+
+    await new MigrateCommand().execute(tempDir, {});
+
+    await expect(fs.access(shard)).resolves.not.toThrow();
+    await expect(
+      fs.access(path.join(changes, '2026', '08', '01-batch-upload'))
+    ).resolves.not.toThrow();
+    const config = await fs.readFile(path.join(tempDir, 'openspec', 'config.yaml'), 'utf-8');
+    expect(config).toContain('lifecycle: status');
+  });
+
+  it('preserves metadata comments and key order when stamping', async () => {
+    const meta = path.join(tempDir, 'openspec', 'changes', 'batch-upload', '.openspec.yaml');
+    await fs.writeFile(
+      meta,
+      '# provenance: imported from wiki\nschema: spec-driven\ncreated: 2026-08-01\n'
+    );
+
+    await new MigrateCommand().execute(tempDir, {});
+
+    const stamped = await fs.readFile(
+      path.join(tempDir, 'openspec', 'changes', '2026', '08', '01-batch-upload', '.openspec.yaml'),
+      'utf-8'
+    );
+    expect(stamped).toContain('# provenance: imported from wiki');
+    expect(stamped).toContain('status: proposed');
+    expect(stamped.indexOf('schema:')).toBeLessThan(stamped.indexOf('created:'));
   });
 
   it('is a no-op on an already-migrated project', async () => {

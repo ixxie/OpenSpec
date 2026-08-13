@@ -8,6 +8,7 @@ import { Change } from '../core/schemas/index.js';
 import type { RootOutput } from '../core/root-selection.js';
 import { isInteractive } from '../utils/interactive.js';
 import { getActiveChangeIds } from '../utils/item-discovery.js';
+import { discoverChanges, resolveChangeDir } from '../core/change-discovery.js';
 import { getTaskProgressForChange } from '../utils/task-progress.js';
 import { FileSystemUtils } from '../utils/file-system.js';
 
@@ -79,10 +80,13 @@ export class ChangeCommand {
       }
     }
 
-    const changeDir = path.join(changesPath, changeName);
+    // Resolve in either layout; the flat fallback keeps not-found errors
+    // pathed and stays behind the traversal guard.
+    const resolved = await resolveChangeDir(changesPath, changeName);
+    const changeDir = resolved ?? path.join(changesPath, changeName);
     const proposalPath = path.join(changeDir, 'proposal.md');
 
-    if (!isChangeDirectoryName(changesPath, changeDir)) {
+    if (resolved === null && !isChangeDirectoryName(changesPath, changeDir)) {
       throw new Error(`Change "${changeName}" not found at ${proposalPath}`);
     }
 
@@ -146,23 +150,30 @@ export class ChangeCommand {
    */
   async list(options?: { json?: boolean; long?: boolean }): Promise<void> {
     const changesPath = path.join(process.cwd(), 'openspec', 'changes');
-    
+
     // Same directory-based resolution as `openspec list`, the command this
     // deprecated alias points users at. Every output path below already
     // tolerates a change whose proposal.md is missing or unreadable.
-    const changes = await getActiveChangeIds();
+    const discovered = await discoverChanges(changesPath).catch(() => []);
+    const changes = discovered.map((change) => change.id);
+    const dirs = new Map(discovered.map((change) => [change.id, change.dir]));
 
     if (options?.json) {
       const changeDetails = await Promise.all(
         changes.map(async (changeName) => {
-          const changeDir = path.join(changesPath, changeName);
+          const changeDir = dirs.get(changeName) ?? path.join(changesPath, changeName);
           const proposalPath = path.join(changeDir, 'proposal.md');
 
           // Resolve task progress through the shared tracked-tasks helper so
           // this deprecated noun-form list cannot re-fork the resolution
           // (#1202). Tasks are independent of the proposal: a change can carry
-          // tasks before, or without, a proposal.md.
-          const taskStatus = await getTaskProgressForChange(changesPath, changeName, process.cwd());
+          // tasks before, or without, a proposal.md. Sharded changes pass
+          // their relative path; the helper joins changesPath with it.
+          const taskStatus = await getTaskProgressForChange(
+            changesPath,
+            path.relative(changesPath, changeDir),
+            process.cwd()
+          );
 
           // No proposal yet is an ordinary state (scaffolded change, or a
           // schema with no proposal artifact), so name the change rather than
@@ -206,9 +217,13 @@ export class ChangeCommand {
 
       // Long format: id: title and minimal counts
       for (const changeName of sorted) {
-        const changeDir = path.join(changesPath, changeName);
+        const changeDir = dirs.get(changeName) ?? path.join(changesPath, changeName);
         const proposalPath = path.join(changeDir, 'proposal.md');
-        const { total, completed } = await getTaskProgressForChange(changesPath, changeName, process.cwd());
+        const { total, completed } = await getTaskProgressForChange(
+          changesPath,
+          path.relative(changesPath, changeDir),
+          process.cwd()
+        );
         const taskStatusText = total > 0 ? ` [tasks ${completed}/${total}]` : '';
         if (await isDefinitelyMissing(proposalPath)) {
           console.log(`${changeName}: (no proposal.md yet)${taskStatusText}`);
@@ -254,8 +269,9 @@ export class ChangeCommand {
       }
     }
     
-    const changeDir = path.join(changesPath, changeName);
-    if (!isChangeDirectoryName(changesPath, changeDir)) {
+    const resolved = await resolveChangeDir(changesPath, changeName);
+    const changeDir = resolved ?? path.join(changesPath, changeName);
+    if (resolved === null && !isChangeDirectoryName(changesPath, changeDir)) {
       throw new Error(`Change "${changeName}" not found at ${changeDir}`);
     }
     try {

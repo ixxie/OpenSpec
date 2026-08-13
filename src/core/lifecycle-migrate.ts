@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { parse as parseYaml, parseDocument, stringify as stringifyYaml } from 'yaml';
 import { resolveLifecycle, type LifecycleMode } from './project-config.js';
 import { discoverChanges } from './change-discovery.js';
 import { SyncCommand } from './sync.js';
@@ -8,6 +8,7 @@ import { SyncCommand } from './sync.js';
 const ARCHIVE_DIR_NAME = /^(\d{4})-(\d{2})-(\d{2})-(.+)$/;
 const SHARD_PATH = /^(\d{4})[/\\](\d{2})[/\\](\d{2})-(.+)$/;
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const YEAR_DIR = /^\d{4}$/;
 
 export interface MigrateOptions {
   dryRun?: boolean;
@@ -82,7 +83,9 @@ export class MigrateCommand {
     }
 
     for (const entry of await this.dirs(changesDir)) {
-      if (entry === 'archive') continue;
+      // Year dirs are shards left by an interrupted earlier run, not changes;
+      // scanning into them would try to rename changes/YYYY into itself.
+      if (entry === 'archive' || YEAR_DIR.test(entry)) continue;
       const from = path.join(changesDir, entry);
       const meta = await this.readRawMetadata(from);
       const created = DATE.test(String(meta?.created ?? '')) ? String(meta?.created) : today;
@@ -94,6 +97,33 @@ export class MigrateCommand {
         status: meta?.status === 'shipped' ? 'shipped' : 'proposed',
         created,
       });
+    }
+
+    // In the sharded layout every command addresses a change by bare id, so a
+    // legacy name reused across archive eras (the date prefix exists to allow
+    // exactly that) would become permanently ambiguous. Refuse before the
+    // first rename; already-sharded entries from an interrupted run count too.
+    const claimed = new Map<string, string[]>();
+    for (const change of await discoverChanges(changesDir)) {
+      const rel = path.relative(changesDir, change.dir);
+      if (SHARD_PATH.test(rel)) {
+        claimed.set(change.id, [...(claimed.get(change.id) ?? []), rel]);
+      }
+    }
+    for (const move of moves) {
+      claimed.set(move.id, [
+        ...(claimed.get(move.id) ?? []),
+        path.relative(changesDir, move.from),
+      ]);
+    }
+    const ambiguous = [...claimed.entries()].filter(([, sources]) => sources.length > 1);
+    if (ambiguous.length > 0) {
+      const listing = ambiguous
+        .map(([id, sources]) => `  ${id}: ${sources.join(', ')}`)
+        .join('\n');
+      throw new Error(
+        `Refusing to migrate: these change ids would be ambiguous in the sharded layout, where commands address changes by bare id:\n${listing}\nRename the colliding folders first (e.g. ${ambiguous[0][0]}-v2), then re-run.`
+      );
     }
 
     await this.apply(moves, targetPath, options, async () => {
@@ -117,17 +147,11 @@ export class MigrateCommand {
     // The archive layout asserts every archived change's fold happened, so a
     // shipped-but-unfolded change must be folded (or unshipped) first. Reuse
     // the gate itself rather than a parallel reimplementation of its verdict.
-    const exitBefore = process.exitCode;
-    const silencedLog = console.log;
-    console.log = () => {};
-    try {
-      await new SyncCommand().execute(undefined, targetPath, { check: true, json: true });
-    } finally {
-      console.log = silencedLog;
-    }
-    const gateRed = process.exitCode === 1 && exitBefore !== 1;
-    process.exitCode = exitBefore;
-    if (gateRed) {
+    const gate = await new SyncCommand().execute(undefined, targetPath, {
+      check: true,
+      silent: true,
+    });
+    if (!gate.clean) {
       throw new Error(
         'Refusing to migrate to `lifecycle: archive`: a shipped change has unfolded deltas (the archive layout would assert a fold that never happened). Run `openspec sync` first.'
       );
@@ -175,6 +199,19 @@ export class MigrateCommand {
       console.log('No changes to migrate.');
     }
 
+    // Two sources mapping to one target would silently clobber the second;
+    // reachable when a hand-edited tree reuses an id within one shard date.
+    const targets = new Map<string, string>();
+    for (const move of moves) {
+      const prior = targets.get(move.to);
+      if (prior !== undefined) {
+        throw new Error(
+          `Refusing to migrate: '${prior}' and '${path.relative(targetPath, move.from)}' both map to '${path.relative(targetPath, move.to)}'. Rename one and re-run.`
+        );
+      }
+      targets.set(move.to, path.relative(targetPath, move.from));
+    }
+
     for (const move of moves) {
       console.log(
         `  ${move.status === 'shipped' ? '✓' : '…'} ${move.id} → ${path.relative(targetPath, move.to)} [${move.status}]`
@@ -217,21 +254,44 @@ export class MigrateCommand {
     targetPath: string,
     target: LifecycleMode
   ): Promise<void> {
-    const existing = (await this.readRawMetadata(move.to)) ?? {};
-    const schema = existing.schema ?? (await this.projectSchema(targetPath));
-    const stamped: Record<string, unknown> = {
-      ...existing,
-      schema,
-      created: existing.created ?? move.created,
-    };
+    const file = path.join(move.to, '.openspec.yaml');
+    let raw: string | null = null;
+    try {
+      raw = await fs.readFile(file, 'utf-8');
+    } catch {
+      raw = null;
+    }
+
+    // Edit the document, not a re-serialization: legacy metadata may carry
+    // comments and key order this migration has no business rewriting. A file
+    // that does not parse gets a fresh minimal stamp — same as before.
+    const doc = parseDocument(raw ?? '');
+    if (doc.errors.length > 0) {
+      const stamped: Record<string, unknown> = {
+        schema: await this.projectSchema(targetPath),
+        created: move.created,
+      };
+      if (target === 'status') {
+        stamped.status = move.status;
+      }
+      await fs.writeFile(file, stringifyYaml(stamped), 'utf-8');
+      return;
+    }
+
+    if (!doc.has('schema')) {
+      doc.set('schema', await this.projectSchema(targetPath));
+    }
+    if (!doc.has('created')) {
+      doc.set('created', move.created);
+    }
     if (target === 'status') {
-      stamped.status = move.status;
+      doc.set('status', move.status);
     } else {
       // Under archive mode location is the state; a lingering status field
       // would be a second, contradicting record.
-      delete stamped.status;
+      doc.delete('status');
     }
-    await fs.writeFile(path.join(move.to, '.openspec.yaml'), stringifyYaml(stamped), 'utf-8');
+    await fs.writeFile(file, doc.toString(), 'utf-8');
   }
 
   /** Remove now-empty YYYY/MM shard directories after a reverse migration. */
