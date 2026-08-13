@@ -3,6 +3,7 @@ import { FileSystemUtils } from './file-system.js';
 import { writeChangeMetadata, validateSchemaName } from './change-metadata.js';
 import { formatLocalDate } from './date.js';
 import { readProjectConfig, resolveLifecycle } from '../core/project-config.js';
+import { discoverChanges } from '../core/change-discovery.js';
 import { isKebabId } from '../core/id.js';
 import type { ChangeMetadata } from '../core/change-metadata/index.js';
 
@@ -157,12 +158,24 @@ export async function createChange(
   // Validate the resolved schema
   validateSchemaName(schemaName, projectRoot);
 
-  // Build the change directory path
-  const changeDir = path.join(options.changesDir ?? path.join(projectRoot, 'openspec', 'changes'), name);
+  // Build the change directory path. Under `lifecycle: status` changes shard
+  // by creation date — changes/YYYY/MM/DD-<name>/ — assigned at birth and
+  // immutable, so location never encodes lifecycle state and nothing moves.
+  const changesRoot = options.changesDir ?? path.join(projectRoot, 'openspec', 'changes');
+  const created = formatLocalDate();
+  const [year, month, day] = created.split('-');
+  const changeDir =
+    resolveLifecycle(projectRoot) === 'status'
+      ? path.join(changesRoot, year, month, `${day}-${name}`)
+      : path.join(changesRoot, name);
 
-  // Check if change already exists
+  // Check if change already exists — under sharding, by id anywhere, since two
+  // shard dates carrying the same name would make the id ambiguous forever.
   if (await FileSystemUtils.directoryExists(changeDir)) {
     throw new Error(`Change '${name}' already exists at ${changeDir}`);
+  }
+  if ((await discoverChanges(changesRoot)).some((c) => c.id === name)) {
+    throw new Error(`Change '${name}' already exists in openspec/changes/`);
   }
 
   // Creating a change may scaffold or complete the root itself (an

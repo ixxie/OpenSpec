@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import type { Dirent } from 'fs';
+import { discoverChanges, resolveChangeDir } from './change-discovery.js';
 import {
   findSpecUpdates,
   buildUpdatedSpec,
@@ -83,12 +83,18 @@ export class SyncCommand {
     const changesDir = path.join(targetPath, 'openspec', 'changes');
     const specsDir = path.join(targetPath, 'openspec', 'specs');
 
-    const candidates = changeName
-      ? [changeName]
-      : await this.shippedChanges(changesDir, targetPath, report);
+    let candidates: Array<{ id: string; dir: string }>;
+    if (changeName) {
+      const dir = await resolveChangeDir(changesDir, changeName);
+      if (dir === null) {
+        throw new Error(`Change '${changeName}' not found in openspec/changes/`);
+      }
+      candidates = [{ id: changeName, dir }];
+    } else {
+      candidates = await this.shippedChanges(changesDir, targetPath, report);
+    }
 
-    for (const name of candidates) {
-      const changeDir = path.join(changesDir, name);
+    for (const { id: name, dir: changeDir } of candidates) {
       const state = await this.evaluate(name, changeDir, specsDir, targetPath, options);
       if (state === null) {
         continue;
@@ -123,29 +129,19 @@ export class SyncCommand {
     changesDir: string,
     projectRoot: string,
     report: SyncReport
-  ): Promise<string[]> {
-    let entries: Dirent[];
-    try {
-      entries = await fs.readdir(changesDir, { withFileTypes: true });
-    } catch {
-      return [];
-    }
-
-    const shipped: string[] = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name === 'archive') {
-        continue;
-      }
+  ): Promise<Array<{ id: string; dir: string }>> {
+    const shipped: Array<{ id: string; dir: string }> = [];
+    for (const change of await discoverChanges(changesDir)) {
       try {
-        const metadata = readChangeMetadata(path.join(changesDir, entry.name), projectRoot);
+        const metadata = readChangeMetadata(change.dir, projectRoot);
         if (metadata?.status === 'shipped') {
-          shipped.push(entry.name);
+          shipped.push(change);
         }
       } catch (err) {
         // Unreadable metadata cannot prove the change is NOT shipped, so the
         // gate fails closed: report it rather than skip it.
         report.changes.push({
-          change: entry.name,
+          change: change.id,
           state: 'conflict',
           pending: [],
           error: err instanceof ChangeMetadataError ? err.message : String(err),
@@ -268,7 +264,13 @@ export class ShipCommand {
       );
     }
 
-    const changeDir = path.join(targetPath, 'openspec', 'changes', changeName);
+    const changeDir = await resolveChangeDir(
+      path.join(targetPath, 'openspec', 'changes'),
+      changeName
+    );
+    if (changeDir === null) {
+      throw new Error(`Change '${changeName}' not found in openspec/changes/`);
+    }
     const metadata = readChangeMetadata(changeDir, targetPath);
     if (!metadata) {
       throw new Error(

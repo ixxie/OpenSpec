@@ -213,6 +213,16 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
     ],
   },
   {
+    name: 'migrate',
+    description: 'Migrate from lifecycle: archive to lifecycle: status',
+    flags: [
+      {
+        name: 'dry-run',
+        description: 'Print the migration plan without writing anything',
+      },
+    ],
+  },
+  {
     name: 'status',
     description: 'Display artifact completion status for a change',
     flags: [
