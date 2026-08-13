@@ -41,7 +41,7 @@ export async function discoverChanges(changesDir: string): Promise<DiscoveredCha
       return;
     }
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
       const full = path.join(dir, entry.name);
       if (depth === 0 && entry.name === 'archive') continue;
       if (depth === 0 && YEAR_DIR.test(entry.name)) {
@@ -62,9 +62,14 @@ export async function discoverChanges(changesDir: string): Promise<DiscoveredCha
 /**
  * Resolve a change id to its directory in either layout. Throws when the id
  * is ambiguous — two shard dates carrying the same name — because guessing
- * would silently act on the wrong change.
+ * would silently act on the wrong change. Ids that could never come out of
+ * discovery (path separators, dot segments, hidden names) resolve to null so
+ * a hostile id cannot address anything outside changes/.
  */
 export async function resolveChangeDir(changesDir: string, id: string): Promise<string | null> {
+  if (!id || id.startsWith('.') || id.includes('/') || id.includes('\\') || id.includes('\0')) {
+    return null;
+  }
   const flat = path.join(changesDir, id);
   try {
     const stat = await fs.stat(flat);
