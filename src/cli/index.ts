@@ -20,6 +20,7 @@ import {
 import { ListCommand } from '../core/list.js';
 import { ArchiveCommand, type ArchiveOptions } from '../core/archive.js';
 import { SyncCommand, ShipCommand } from '../core/sync.js';
+import { MigrateCommand } from '../core/lifecycle-migrate.js';
 import { ViewCommand } from '../core/view.js';
 import { resolveRootForCommand, toRootOutput } from '../core/root-selection.js';
 import { registerSpecCommand } from '../commands/spec.js';
@@ -485,6 +486,21 @@ program
       }
     } catch (error) {
       failWithError(error, { enabled: options?.json, fallbackCode: 'ship_error' });
+      process.exit(1);
+    }
+  });
+
+program
+  .command('migrate')
+  .description(
+    'Migrate this project from `lifecycle: archive` to `lifecycle: status` (archived changes become shipped, sharded by date; nothing is deleted)'
+  )
+  .option('--dry-run', 'Print the migration plan without writing anything')
+  .action(async (options?: { dryRun?: boolean }) => {
+    try {
+      await new MigrateCommand().execute('.', options ?? {});
+    } catch (error) {
+      failWithError(error);
       process.exit(1);
     }
   });
