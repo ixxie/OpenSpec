@@ -466,7 +466,7 @@ program
         process.exitCode = 1;
       }
     } catch (error) {
-      failWithError(error);
+      failWithError(error, { enabled: options?.json, fallbackCode: 'sync_error' });
       process.exit(1);
     }
   });
@@ -484,7 +484,7 @@ program
         process.exitCode = 1;
       }
     } catch (error) {
-      failWithError(error);
+      failWithError(error, { enabled: options?.json, fallbackCode: 'ship_error' });
       process.exit(1);
     }
   });

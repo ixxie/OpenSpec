@@ -127,8 +127,15 @@ export class SyncCommand {
     let entries: Dirent[];
     try {
       entries = await fs.readdir(changesDir, { withFileTypes: true });
-    } catch {
-      return [];
+    } catch (err) {
+      // A missing changes/ dir means "no changes". Anything else (EACCES,
+      // ENOTDIR, ...) means the gate cannot see what it is meant to verify,
+      // and a gate that reports green on an unreadable tree is worse than no
+      // gate — so fail closed rather than claim there is nothing shipped.
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+        return [];
+      }
+      throw err;
     }
 
     const shipped: string[] = [];

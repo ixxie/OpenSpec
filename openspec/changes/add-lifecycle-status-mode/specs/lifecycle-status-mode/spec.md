@@ -90,12 +90,28 @@ A change's `.openspec.yaml` SHALL accept an optional `status` field with the val
 
 ### Requirement: Archive and status modes stay disjoint
 
-`openspec archive` SHALL refuse to run in a project resolving to `lifecycle: status`, and the message SHALL point at the status-mode workflow. `openspec sync` and `openspec ship` SHALL report that there is nothing to do in a project resolving to `lifecycle: archive` and exit zero. Neither mode's commands SHALL act on a project that has selected the other.
+Neither mode's commands SHALL act on a project that has selected the other. `openspec archive` SHALL refuse to run in a project resolving to `lifecycle: status`, and `openspec ship` SHALL refuse to run in a project resolving to `lifecycle: archive`; both messages SHALL name the resolved mode and point at the other mode's workflow. `openspec sync` SHALL instead report that there is nothing to gate under `lifecycle: archive` and exit zero, so that a repository-wide gate invocation is harmless in a project that has not opted in.
 
 #### Scenario: Archive refuses under status mode
 - **WHEN** a user runs `openspec archive add-auth` in a status-mode project
 - **THEN** the command fails with a message naming `lifecycle: status` and pointing at the status workflow, and no files are moved or modified
 
-#### Scenario: Sync reports nothing to do under archive mode
+#### Scenario: Ship refuses under archive mode
+- **WHEN** a user runs `openspec ship add-auth` in a project resolving to `lifecycle: archive`
+- **THEN** the command fails with a message naming `lifecycle: archive` and pointing at `openspec archive`, and no status field is written
+
+#### Scenario: Sync is a harmless no-op under archive mode
 - **WHEN** a user runs `openspec sync --check` in a project resolving to `lifecycle: archive`
-- **THEN** the command reports that the project uses archive mode and exits zero
+- **THEN** the command reports that the project uses archive mode, modifies nothing, and exits zero
+
+### Requirement: The gate fails closed when it cannot read the tree
+
+`openspec sync` SHALL treat an absent `openspec/changes/` directory as "no changes" and exit zero, but SHALL propagate any other error encountered while enumerating changes rather than reporting an empty result. A tree the gate cannot read SHALL NOT be reported as a passing tree.
+
+#### Scenario: Missing changes directory is not an error
+- **WHEN** a user runs `openspec sync --check` in a status-mode project that has no `openspec/changes/` directory
+- **THEN** the command reports no shipped changes to sync and exits zero
+
+#### Scenario: Unreadable changes directory fails rather than passing
+- **WHEN** a user runs `openspec sync --check` in a status-mode project whose `openspec/changes/` path cannot be enumerated
+- **THEN** the command fails rather than reporting a clean tree

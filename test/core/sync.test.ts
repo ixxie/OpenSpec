@@ -109,6 +109,30 @@ describe('SyncCommand', () => {
     expect(refolded).toBe(folded);
   });
 
+  it('fails closed when the changes directory cannot be enumerated', async () => {
+    await scaffold({ lifecycle: 'status', status: 'shipped' });
+    // A file where changes/ should be: readable project, unreadable tree. A
+    // gate that reports green here is worse than no gate.
+    await fs.rm(path.join(tempDir, 'openspec', 'changes'), { recursive: true, force: true });
+    await fs.writeFile(path.join(tempDir, 'openspec', 'changes'), 'not a directory\n');
+
+    await expect(
+      new SyncCommand().execute(undefined, tempDir, { check: true, silent: true })
+    ).rejects.toThrow();
+  });
+
+  it('treats an absent changes directory as no changes', async () => {
+    await scaffold({ lifecycle: 'status', status: 'shipped' });
+    await fs.rm(path.join(tempDir, 'openspec', 'changes'), { recursive: true, force: true });
+
+    const report = await new SyncCommand().execute(undefined, tempDir, {
+      check: true,
+      silent: true,
+    });
+    expect(report.clean).toBe(true);
+    expect(report.changes).toEqual([]);
+  });
+
   it('silent mode emits nothing and still returns the report', async () => {
     await scaffold({ lifecycle: 'status', status: 'shipped' });
     const report = await new SyncCommand().execute(undefined, tempDir, {
@@ -204,5 +228,30 @@ describe('ArchiveCommand under lifecycle: status', () => {
     } finally {
       process.chdir(cwd);
     }
+  });
+
+  it('refuses in JSON mode with a diagnostic and leaves the change in place', async () => {
+    const cwd = process.cwd();
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      logs.push(args.join(' '));
+    };
+    process.chdir(tempDir);
+    process.exitCode = undefined;
+    try {
+      await new ArchiveCommand().execute('add-oauth', { yes: true, json: true });
+    } finally {
+      console.log = originalLog;
+      process.chdir(cwd);
+    }
+
+    const payload = JSON.parse(logs.join('\n'));
+    expect(payload.archive).toBeNull();
+    expect(payload.status?.[0]?.code).toBe('lifecycle_status_mode');
+    expect(process.exitCode).toBe(1);
+    await expect(
+      fs.access(path.join(tempDir, 'openspec', 'changes', 'add-oauth'))
+    ).resolves.not.toThrow();
   });
 });
