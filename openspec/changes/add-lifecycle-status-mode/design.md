@@ -21,7 +21,7 @@
 
 - Concurrent modification of the same requirement by two open changes (see #1669 and the parallel-merge plan).
 - Replacing the archive workflow. This is an experiment with an exit; if it does not graduate, it is removed.
-- Deciding where change directories live (see #1367).
+- Capability maturity tags. Those describe requirements, not changes.
 
 ## Decisions
 
@@ -54,6 +54,22 @@ Hooks are advisory (`--no-verify` skips them), so CI remains the authority for t
 
 Under `lifecycle: status`, `openspec archive` throws and names the alternative. Two models that can both claim a change is finished would let `specs/` disagree with itself. The refusal is what keeps `specs/` = shipped reality true in both modes, which is also what makes migration between them a pure relayout: neither mode's `specs/` content differs.
 
+### Layout shards by creation date, which is immutable
+
+If nothing ever moves, `changes/` accumulates. The layout shards by a date **assigned at birth**: `changes/2026/03/15-add-oauth/`. Creation date is chosen precisely because it can never change — sharding by *shipped* date would smuggle the move back in, which is the thing this design removes. The day prefix keeps the full date in the path and `ls` chronological, carrying the same information today's `archive/YYYY-MM-DD-<name>/` carries, relocated from the contested end of the lifecycle to the fixed one.
+
+Discovery reads both layouts by rule: `YYYY` and `MM` directories are shards to walk into, anything else is a change. That keeps flat projects working untouched and makes the layout a storage detail rather than a new contract.
+
+This is the decision most likely to be superseded. [#1367](https://github.com/Fission-AI/OpenSpec/pull/1367) proposes user-chosen *domains* under `changes/`, discovered by a leaf marker (`.openspec.yaml`/`proposal.md` present) rather than a naming convention. That is a better mechanism, and domains carry meaning a calendar cannot. If it lands, this sharding should be dropped in favor of it, and discovery here should be replaced by that walk — the mode above does not depend on which one wins, only on nothing moving. Noted here rather than resolved because it is upstream's call, not ours.
+
+### Migration is bidirectional, because an experiment must be leaveable
+
+`openspec migrate` converts in both directions, and neither direction touches spec text: archive-mode `specs/` is folded shipped reality, which is exactly what status-mode maintains. Reversal is therefore a pure relayout, covered by a round-trip test.
+
+The reverse direction refuses while any shipped change has unfolded deltas, because the archive layout asserts a fold that must actually exist. It reuses the gate itself rather than reimplementing its verdict — the same anti-drift reasoning as `--check` sharing the fold's code path.
+
+Two hazards the forward direction has to handle, both consequences of bare change ids: a legacy name reused across archive eras would shard into two directories no bare id can address (refused up front, with the collisions named), and an interrupted run leaves shards that a naive re-run would try to move into themselves (skipped, so the migration resumes).
+
 ## Risks / Trade-offs
 
 - **`ls` stops being the answer to "what's active."** Once state is data, the filesystem is no longer the UI for state; `openspec list --status proposed` is. This is the honest cost of the whole design and is why the mode is opt-in.
@@ -62,6 +78,6 @@ Under `lifecycle: status`, `openspec archive` throws and names the alternative. 
 
 ## Migration
 
-None required. Adoption is a config line: existing `changes/archive/` history stays where it is with its folds already in `specs/`, so `sync --check` is green on day one. Changes authored before the flip carry no `status` field and are simply not gated until `ship` stamps them.
+`openspec migrate` converts a legacy project: archived changes become `status: shipped` sharded by the date their archive folder recorded, in-flight changes become `status: proposed` sharded by their `created` date, the now-empty `archive/` directory is removed, and the config line is written last so an interrupted run is resumable. Nothing is deleted, and `sync --check` verifies the result by regeneration — the engine's own folds re-apply byte-identically, so the gate is green immediately after migrating.
 
-Leaving is the same edit in reverse, with one caveat this change does not yet address: a change shipped under status mode sits flat in `changes/` and would need to be moved into `changes/archive/` by hand. A `migrate` command covering both directions was prototyped alongside this change and is held back for a follow-up, so this PR stays one reviewable idea.
+`openspec migrate --to archive` converts back: shipped changes return to `changes/archive/<created>-<name>/`, proposed changes return to flat `changes/<name>/`, the `status` key is stripped (under archive mode, location is the state), and empty shard directories are pruned. One caveat worth stating: a change shipped under status mode carries its *creation* date into an archive folder name where convention reads an *archival* date. That is the only information the round trip cannot preserve, because archive mode never recorded the other one.
